@@ -198,6 +198,7 @@ class Database:
                     source_username TEXT PRIMARY KEY,
                     last_tweet_id TEXT,
                     last_rss_entry_id TEXT,
+                    source_tweet_timestamp TEXT,
                     last_checked TEXT
                 );
 
@@ -223,6 +224,10 @@ class Database:
                 ("last_attempt_at", "TEXT"), ("updated_at", "TEXT"),
             ]:
                 self._ensure_column(conn, "reply_queue", col, decl)
+            for col, decl in [
+                ("source_tweet_timestamp", "TEXT"),
+            ]:
+                self._ensure_column(conn, "source_checkpoints", col, decl)
             try:
                 conn.execute(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_reply_queue_comment ON reply_queue(comment_id)"
@@ -1061,6 +1066,14 @@ class Database:
         with self.transaction() as conn:
             row = conn.execute(
                 "SELECT last_tweet_id FROM source_checkpoints WHERE source_username=?",
+                (source_username,),
+            ).fetchone()
+        return row[0] if row and row[0] else None
+
+    def get_source_tweet_timestamp(self, source_username: str) -> Optional[str]:
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT source_tweet_timestamp FROM source_checkpoints WHERE source_username=?",
                 (source_username,),
             ).fetchone()
         return row[0] if row and row[0] else None

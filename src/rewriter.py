@@ -40,14 +40,14 @@ class RewriteResult:
 
 class TweetRewriter:
     SYSTEM_PROMPT = """Tu es @UniversCule, un média francophone passionné, 100% FC Barcelona.
-Tu écris comme un journaliste supporter humain : naturel, direct, vivant, jamais robotique.
+Tu écris comme un journaliste sportif français professionnel : naturel, direct, vivant, jamais robotique.
 
 RÈGLES ABSOLUES :
 1. Réponds UNIQUEMENT avec le texte final du tweet, en FRANÇAIS.
 2. Traduis toute information non francophone. Ne recopie jamais la langue source.
 3. Garde les faits exacts. N'invente rien, ne rajoute pas de contexte absent.
-4. Style : 1 à 3 phrases courtes, ton journaliste/supporter. Pas de "Voici", "Bien sûr", "En tant que", "Il est important de noter".
-5. Maximum 260 caractères. Pas de lien, pas de mention @, pas de markdown, pas de hashtag.
+4. Style : headline en MAJUSCULES, emojis pertinents, sauts de ligne pour la lisibilité.
+5. Maximum 260 caractères. Pas de lien, pas de mention @ (sauf pour citer une source présente dans le tweet original), pas de markdown, pas de hashtag.
 6. Vocabulaire football correct :
    - right-back = latéral droit ; left-back = latéral gauche
    - centre-back = défenseur central ; midfielder = milieu de terrain
@@ -64,18 +64,33 @@ RÈGLES ABSOLUES :
    - "boosted" (réseaux sociaux) = mis en avant / sponsorisé, selon le contexte
 7. Ne traduis pas les noms propres, les surnoms de joueurs ni les noms de clubs.
 8. N'invente AUCUN chiffre, score, statistique, date ou nom absent de la source.
-9. Pas de point d'exclamation à répétition, pas de majuscules criardes. Les emojis sont autorisés avec parcimonie.
+9. Pas de point d'exclamation à répétition. Les emojis sont autorisés avec parcimonie.
 10. Jamais d'espace après une apostrophe d'élision ("l'égalisation", pas "l' égalisation").
 11. Ne mélange JAMAIS l'anglais et le français : "the", "goal", "substitution", "enters", "levels" sont interdits dans le tweet final.
 12. Changements : écris une phrase française claire, jamais de flèches ni de pastilles de couleur.
     Format attendu : "Double changement pour le Barça à la 85e : Adeyemi et Gabriel Jesus entrent, Gordon et Raphinha sortent."
     Interdits dans le tweet final : ↑ ↓ ⬆ ⬇ 🟢 🔴 et toute notation brute de type "↑🟢 Joueur".
+13. ANGLICISMES INTERDITS :
+    - "website" → "site web"
+    - "award" → "trophée" ou "prix"
+    - "announcement" → "annonce"
+    - "update" → "mise à jour"
+    - "coming" → "arrive" ou "prochain"
+    - "news" → "info" ou "nouvelle"
+14. FORMAT MEDIA FRANÇAIS :
+    - Début par des emojis pertinents (🚨 pour info urgente, 🌕 pour événement nocturne, ✈️ pour voyage, 💙🔴 pour Barça)
+    - Headline en MAJUSCULES suivi d'un saut de ligne
+    - Contenu en lettres normales
+    - Si le tweet original cite une source (@username, "selon @xx", "Source: @xx"), conserve cette citation
+    - Ne PAS ajouter de source si le tweet original n'en cite pas
 
-Exemples de bons réflexes :
-- "Reports: Barcelona want a new right-back" → "Selon les informations, le Barça cherche un nouveau latéral droit."
-- "Official: squad list for El Clasico" → "Officiel : la liste des convoqués pour le Clasico est tombée."
-- "Double substitution: 84' ↑🟢 Adeyemi, ↑🟢 Gabriel Jesus ↓🔴 Gordon, ↓🔴 Raphinha" → "Double changement pour le Barça à la 84e : Adeyemi et Gabriel Jesus entrent, Gordon et Raphinha sortent."
-- "Raphinha reacts to Real Madrid's second goal" → "Raphinha réagit au deuxième but du Real Madrid."
+Exemples de format attendu :
+- "🚨🚨🚨 KOUNDÉ ET CHRISTENSEN : DES RETOURS ESPÉRÉS \n\nHansi Flick espère récupérer Jules Koundé pour affronter Alavés et Andreas Christensen pour le match contre l'Atlético de Madrid."
+- "🌕🚨 LA DÉLÉGATION DU BARÇA VIENT D'ATTERRIR À LONDRES ! ✈️\n\nLes Blaugrana se dirigent désormais vers leur hôtel avant la cérémonie du Ballon d'Or ce soir."
+- "🚨 LE BARÇA DÉVOILE UNE VIDÉO SPÉCIALE AVANT LA CÉRÉMONIE DU BALLON D'OR 🤩\n\n12 maillots, des joueuses et des joueurs mis à l'honneur… 💙🔴"
+- Avec source citée DANS le tweet : "🚨 FERRAN TORRES 16E DU BALLON D'OR 🏆\n\nL'attaquant espagnol termine 16e du vote, selon @Barca_buzz."
+
+Rappel : le Barça = bleu et rouge (💙🔴), toujours dans cet ordre !
 """
 
     REPLY_PROMPT = """Tu es @UniversCule, média francophone 100% FC Barcelona.
@@ -118,7 +133,9 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
         text = re.sub(r"^\s*(?:tweet|réponse|post)\s*:\s*", "", text, flags=re.IGNORECASE)
         text = re.sub(r"^\s*(?:bien sûr|voici|d'accord)[,:\s]+", "", text, flags=re.IGNORECASE)
         text = text.strip().strip('"').strip("'").strip()
-        text = re.sub(r"\s+", " ", text).strip()
+        # Preserve newlines for media format: headline\ncontent\n[source]
+        text = re.sub(r"[^\S\n]+", " ", text)  # Collapse horizontal whitespace only
+        text = re.sub(r"\n{3,}", "\n\n", text)  # Limit consecutive newlines
         # Do not let the model insert source handles or links.
         text = re.sub(r"https?://\S+", "", text)
         text = re.sub(r"(?<!\w)@[A-Za-z0-9_]{2,15}", "", text)
@@ -129,7 +146,6 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
         # such as 21:30, where the colon sits between two digits).
         text = re.sub(r"(?<=[A-Za-zÀ-ÿ])\s*:", " :", text)
         text = re.sub(r"(?<=[A-Za-zÀ-ÿ0-9])\s*([;!?])", r" \1", text)
-        text = re.sub(r"\s{2,}", " ", text).strip()
         return text
 
     def _looks_french(self, text: str) -> bool:
@@ -150,6 +166,15 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
         # still rejected by _ENGLISH_LEAKS below.
         markers = {m.lower() for m in self._FRENCH_MARKERS.findall(cleaned)}
         return len(markers) >= 2
+
+    def _detect_source_citations(self, text: str) -> List[str]:
+        """Detect @mentions that appear to be source citations."""
+        # Find all @mentions in the text
+        mentions = re.findall(r"@([A-Za-z0-9_]{2,15})", text)
+        # Filter out common non-source mentions
+        non_sources = {"barcelona", "fcb", "fcbarcelona", "universcule"}
+        sources = [m for m in mentions if m.lower() not in non_sources]
+        return list(set(sources))
 
     # Output fragments that were observed as broken/low-quality generations.
     _BAD_OUTPUTS = {
@@ -270,6 +295,10 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
         leak = self._ENGLISH_LEAKS.search(text)
         if leak:
             return f"anglicisme/anglais détecté: « {leak.group(0)} »"
+        # Angles courants à éviter
+        for anglicism in ["website", "web site", "award", "announcement", "update", "coming", "news"]:
+            if anglicism in low:
+                return f"anglicisme détecté: « {anglicism} »"
         if self._RAW_NOTATION.search(text):
             return "notation brute de remplacement (flèches/pastilles)"
         if re.search(r"[A-Za-zÀ-ÿ](['’])\s", text):
@@ -316,9 +345,15 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
                 "sans préambule."
             )
         else:
+            # Détecter les citations de source dans le tweet original
+            source_citations = self._detect_source_citations(original)
+            citation_info = ""
+            if source_citations:
+                citation_info = f"Citations de source présentes dans le tweet : {', '.join('@' + s for s in source_citations)}. Conserve-les dans ton tweet.\n"
             user_prompt = (
                 f"Compte source : @{source_username}\n"
                 f"Langue source : {source_lang or 'auto'}\n"
+                f"{citation_info}"
                 f"Information à transformer en tweet français :\n{original}\n\n"
                 "Écris le tweet final maintenant, sans préambule."
             )
@@ -362,6 +397,20 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
                         logger.debug("Raccourcissement Ollama impossible: {}", exc)
                 if weighted_length(candidate) > self.max_chars:
                     candidate = truncate_weighted(candidate, self.max_chars)
+                # Restaurer les citations de source si présentes dans l'original
+                if source_citations:
+                    for cit in source_citations:
+                        if f"@{cit}" not in candidate:
+                            # Ajouter la citation si elle n'est pas déjà présente
+                            candidate = candidate.rstrip() + f" @{cit}"
+                            if weighted_length(candidate) > self.max_chars:
+                                candidate = truncate_weighted(candidate, self.max_chars)
+                                break
+                # Cas spécial : Fabrizio Romano - si pas d'autre source, le citer lui
+                elif source_username.lower() == "fabrizioromano" and not candidate.endswith("@FabrizioRomano"):
+                    candidate = candidate.rstrip() + " @FabrizioRomano"
+                    if weighted_length(candidate) > self.max_chars:
+                        candidate = truncate_weighted(candidate, self.max_chars)
                 return RewriteResult(
                     original_text=original,
                     rewritten_text=candidate,
@@ -382,6 +431,20 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
         lang = self._detect_language(original, source_lang)
         if lang == "fr" and self._invalid(original) is None:
             fallback = truncate_weighted(original, self.max_chars)
+            # Restaurer les citations de source si présentes dans l'original
+            source_citations = self._detect_source_citations(original)
+            if source_citations:
+                for cit in source_citations:
+                    if f"@{cit}" not in fallback:
+                        fallback = fallback.rstrip() + f" @{cit}"
+                        if weighted_length(fallback) > self.max_chars:
+                            fallback = truncate_weighted(fallback, self.max_chars)
+                            break
+            # Cas spécial : Fabrizio Romano - si pas d'autre source, le citer lui
+            elif source_username.lower() == "fabrizioromano" and not fallback.endswith("@FabrizioRomano"):
+                fallback = fallback.rstrip() + " @FabrizioRomano"
+                if weighted_length(fallback) > self.max_chars:
+                    fallback = truncate_weighted(fallback, self.max_chars)
             return RewriteResult(
                 original, fallback, weighted_length(original), weighted_length(fallback),
                 lang, "fallback-fr", True,

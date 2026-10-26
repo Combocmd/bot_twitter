@@ -186,6 +186,7 @@ def _setup_logging(config: Config) -> None:
 class BotOrchestrator:
     def __init__(self, config_path: Optional[str] = None):
         self.config = load_config(config_path) if config_path else get_config()
+        self.ollama_available = False
         _setup_logging(self.config)
         self._init_components()
 
@@ -198,6 +199,12 @@ class BotOrchestrator:
         self.filter = BarcaFilter(self.config)
         self.dedup = ContentDeduplicator(self.db, self.config)
         self.rewriter = TweetRewriter(self.config)
+        try:
+            self.rewriter.check_model()
+            self.ollama_available = True
+        except Exception as e:
+            logger.error(f"Ollama check failed during startup: {e}")
+            self.ollama_available = False
         self.media = MediaDownloader(self.db, self.config)
         self.match_calendar = MatchCalendar(self.config)
         self.match_calendar.refresh_if_needed()
@@ -460,6 +467,7 @@ class BotOrchestrator:
             "dedup_cache": self.dedup.get_cache_stats(),
             "sources": self.monitor.get_source_stats(),
             "replies": self.reply_manager.get_status(),
+            "ollama_available": self.ollama_available,
             "sessions": {
                 "reader": state_summary(READER_STATE),
                 "writer": state_summary(WRITER_STATE),

@@ -44,6 +44,7 @@ sources:
     - "Barca_buzz"
     - "barcacentre"
     - "FCBarcelona"
+    - "FabrizioRomano"
   # RSS feeds for sources that have them (free alternative to Twitter API)
   rss_feeds:
     BarcaUniversal: "https://barcauniversal.com/feed/"

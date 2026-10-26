@@ -239,6 +239,15 @@ class PostScheduler:
         text = (text or "").strip()
         if not text:
             raise ValueError("Texte vide")
+        
+        if source_tweet_id:
+            source_time = self.db.get_source_tweet_timestamp(source_username)
+            if source_time:
+                time_elapsed = now_utc() - source_time
+                if time_elapsed > timedelta(minutes=2):
+                    logger.warning(f"Tweet {source_tweet_id} trop vieux ({time_elapsed.total_seconds():.0f}s). Ignoré.")
+                    raise ValueError("Tweet trop vieux pour être publié (max 2 minutes).")
+
         length = weighted_length(text)
         if length > self.config.length.max_chars:
             raise ValueError(
