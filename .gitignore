@@ -1,0 +1,48 @@
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+OllamaSetup.exe
+nul
+
+# Runtime state: X sessions, browser profiles, SQLite DB, caches, locks
+data/
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.venv/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# Database files outside data/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Ollama models (if stored locally)
+models/

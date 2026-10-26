@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "barca-twitter-bot"
+version = "1.0.0"
+description = "Barcelona football Twitter bot for @UniversCule - monitors sources, rewrites in human-like French, posts with media, replies to comments"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "tweepy>=4.14.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "apscheduler>=3.10",
+    "sentence-transformers>=2.7.0",
+    "torch>=2.0.0",
+    "numpy>=1.24.0",
+    "requests>=2.31.0",
+    "langdetect>=1.0.9",
+    "ollama>=0.1.7",
+    "tenacity>=8.2.0",
+    "rich>=13.0.0",
+    "loguru>=0.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = ["E", "F", "I", "W", "UP", "B", "C4", "ANN", "T20"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
