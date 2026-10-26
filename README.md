@@ -1,6 +1,6 @@
 # 🤖 Barcelona Twitter Bot - @UniversCule
 
-**Version 1.1.0** — voir [CHANGELOG.md](CHANGELOG.md).
+**Version 1.1.1** — voir [CHANGELOG.md](CHANGELOG.md).
 
 Bot Twitter autonome pour le média football **@UniversCule** (FC Barcelona).  
 Surveille 7 comptes sources, réécrit l'info en français naturel, poste avec médias, répond aux commentaires pertinents.
@@ -75,6 +75,19 @@ OLLAMA_MODEL=qwen2.5:7b
 - `deduplication` : seuil similarité (0.82), fenêtre temporelle
 
 ## 🎮 Utilisation
+
+### Démarrage rapide (Windows)
+
+| Action | Comment |
+|---|---|
+| **Démarrer** | Double-clic sur `demarrer.bat` |
+| **Arrêter** | Double-clic sur `arreter.bat` (ou Ctrl+C dans la fenêtre) |
+
+La fenêtre du bot doit rester ouverte pendant qu'il tourne. Si une instance
+tourne déjà, `demarrer.bat` refuse de démarrer une seconde instance et indique
+son PID.
+
+### Commandes
 
 ```bash
 # Activer l'environnement

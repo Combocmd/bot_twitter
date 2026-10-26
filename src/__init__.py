@@ -1,7 +1,7 @@
 """
 Barcelona Twitter Bot - Main package.
 """
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 __author__ = "UniversCule Bot"
 
 from .config import load_config, get_config, Config

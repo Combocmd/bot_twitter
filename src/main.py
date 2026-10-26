@@ -101,23 +101,29 @@ class InstanceLock:
     def __init__(self, path: Path):
         self.path = path
 
+    def running_pid(self) -> Optional[int]:
+        """PID of the live process holding the lock, or None if free/stale."""
+        if not self.path.exists():
+            return None
+        try:
+            pid = int(self.path.read_text(encoding="utf-8").strip() or 0)
+        except (OSError, ValueError):
+            return None
+        return pid if pid and _pid_alive(pid) else None
+
     def acquire(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists():
-            try:
-                pid = int(self.path.read_text(encoding="utf-8").strip() or 0)
-            except (OSError, ValueError):
-                pid = 0
-            if pid and _pid_alive(pid):
-                raise RuntimeError(
-                    f"Une autre instance du bot fonctionne déjà (PID {pid}, {self.path}). "
-                    "Arrêtez-la avant de relancer le bot."
-                )
-            # Stale lock left by a crash: the PID is gone, take over.
-            try:
-                self.path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        owner = self.running_pid()
+        if owner:
+            raise RuntimeError(
+                f"Une autre instance du bot fonctionne déjà (PID {owner}, {self.path}). "
+                "Arrêtez-la avant de relancer le bot."
+            )
+        # Stale lock left by a crash: the PID is gone, take over.
+        try:
+            self.path.unlink(missing_ok=True)
+        except OSError:
+            pass
         try:
             self._handle = self.path.open("x", encoding="utf-8")
             self._handle.write(str(os.getpid()))
@@ -469,7 +475,19 @@ class BotOrchestrator:
 @app.command()
 def start(config: Optional[str] = typer.Option(None, "--config", "-c", help="Chemin vers config.yaml")):
     """Démarrer le bot en mode daemon."""
-    BotOrchestrator(config).start()
+    # Fail fast: checking the lock before loading models avoids a 30 s wait
+    # just to learn that the bot is already running.
+    owner = InstanceLock(_project_path("data/bot.lock")).running_pid()
+    if owner:
+        console.print(f"[red]Le bot tourne déjà (PID {owner}).[/red]")
+        console.print("[yellow]Utilisez arreter.bat pour l'arrêter.[/yellow]")
+        raise typer.Exit(code=1)
+    try:
+        BotOrchestrator(config).start()
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        console.print("[yellow]Arrêtez l'autre instance ou utilisez arreter.bat.[/yellow]")
+        raise typer.Exit(code=1)
 
 
 @app.command()

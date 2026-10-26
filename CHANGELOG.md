@@ -4,6 +4,19 @@ Toutes les évolutions notables de ce projet sont documentées ici.
 Format basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et
 [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [1.1.1] - 2026-10-26
+
+Lancement simplifié sous Windows.
+
+### Ajouté
+
+- `demarrer.bat` : démarrage par double-clic (vérifie l'environnement, garde la
+  fenêtre ouverte, affiche un message clair en cas d'échec).
+- `arreter.bat` : arrêt propre par double-clic (lit le PID du verrou, nettoie le
+  verrou et les processus restants).
+- Vérification du verrou **avant** le chargement des modèles : une seconde
+  instance est refusée en une seconde au lieu d'attendre ~30 s.
+
 ## [1.1.0] - 2026-10-26
 
 Publication continue, 24h/24.
