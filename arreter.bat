@@ -14,7 +14,6 @@ if exist "data\bot.lock" (
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*src.main*' -and $_.Name -match 'python' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 
-%SystemRoot%\System32\timeout.exe /t 2 /nobreak >nul
 del /q "data\bot.lock" 2>nul
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*src.main*' -and $_.Name -match 'python' }; if ($p) { Write-Host '   Echec: le bot tourne encore.' } else { Write-Host '   Bot arrete.' }"
