@@ -4,6 +4,27 @@ Toutes les évolutions notables de ce projet sont documentées ici.
 Format basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et
 [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [1.0.1] - 2026-10-26
+
+Durcissement éditorial après l'analyse de tweets publiés de qualité insuffisante.
+
+### Corrigé
+
+- **Notation brute de remplacement** : les flèches et pastilles copiées de la source
+  (`↑🟢 Adeyemi, ↓🔴 Gordon`) sont désormais rejetées. Le tweet doit être une phrase
+  française : « Double changement pour le Barça à la 84e : Adeyemi et Gabriel Jesus
+  entrent, Gordon et Raphinha sortent. »
+- **Fait déformé** : un « deuxième but » de la source ne peut plus devenir une
+  « égalisation » dans la réécriture. Contrôle ajouté pour `second/2nd goal`,
+  `third/3rd goal` et `equaliser / levels the match`.
+- **Traductions douteuses** : « levelle le match » → « égalise », « But n°2 » →
+  « deuxième but », avec rejet si le modèle réintroduit la formulation fautive.
+
+### Ajouté
+
+- Rappels de correction enrichis lors de la deuxième tentative (flèches, faits exacts).
+- Exemples de référence dans le prompt système (changements, buts).
+
 ## [1.0.0] - 2026-10-26
 
 Première version publique du bot @UniversCule.
@@ -49,3 +70,4 @@ Première version publique du bot @UniversCule.
 - `.env`, sessions X, profils navigateur, base SQLite et logs exclus du dépôt.
 
 [1.0.0]: https://github.com/Combocmd/bot_twitter/releases/tag/v1.0.0
+[1.0.1]: https://github.com/Combocmd/bot_twitter/releases/tag/v1.0.1

@@ -67,10 +67,15 @@ RÈGLES ABSOLUES :
 9. Pas de point d'exclamation à répétition, pas de majuscules criardes. Les emojis sont autorisés avec parcimonie.
 10. Jamais d'espace après une apostrophe d'élision ("l'égalisation", pas "l' égalisation").
 11. Ne mélange JAMAIS l'anglais et le français : "the", "goal", "substitution", "enters", "levels" sont interdits dans le tweet final.
+12. Changements : écris une phrase française claire, jamais de flèches ni de pastilles de couleur.
+    Format attendu : "Double changement pour le Barça à la 85e : Adeyemi et Gabriel Jesus entrent, Gordon et Raphinha sortent."
+    Interdits dans le tweet final : ↑ ↓ ⬆ ⬇ 🟢 🔴 et toute notation brute de type "↑🟢 Joueur".
 
 Exemples de bons réflexes :
 - "Reports: Barcelona want a new right-back" → "Selon les informations, le Barça cherche un nouveau latéral droit."
 - "Official: squad list for El Clasico" → "Officiel : la liste des convoqués pour le Clasico est tombée."
+- "Double substitution: 84' ↑🟢 Adeyemi, ↑🟢 Gabriel Jesus ↓🔴 Gordon, ↓🔴 Raphinha" → "Double changement pour le Barça à la 84e : Adeyemi et Gabriel Jesus entrent, Gordon et Raphinha sortent."
+- "Raphinha reacts to Real Madrid's second goal" → "Raphinha réagit au deuxième but du Real Madrid."
 """
 
     REPLY_PROMPT = """Tu es @UniversCule, média francophone 100% FC Barcelona.
@@ -160,6 +165,9 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
         r"entrent|sort|changement|remplacement|égalise|victoire|défaite)\b",
         re.IGNORECASE,
     )
+    # Raw substitution notation copied from the source (arrows/coloured dots)
+    # is not publishable by a media account.
+    _RAW_NOTATION = re.compile(r"[↑↓⬆⬇🟢🔴🟥]")
     # English words that must never survive into a French media tweet.
     # NB: "match", "score" and "chance" are valid French words and are NOT leaks.
     _ENGLISH_LEAKS = re.compile(
@@ -204,6 +212,21 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
     def _numbers(text: str) -> set:
         return set(re.findall(r"\d+", text))
 
+    # Facts expressed as ordinals in the source: the rewrite must keep the
+    # same fact instead of substituting an invented one (e.g. turning
+    # "second goal" into "égalisation", which adds information).
+    _ORDINAL_FACTS = (
+        (re.compile(r"\b(?:second|2nd)\s+goal\b", re.IGNORECASE),
+         re.compile(r"\b(?:deuxième|2e|second)\s+but\b", re.IGNORECASE),
+         "deuxième but"),
+        (re.compile(r"\b(?:third|3rd)\s+goal\b", re.IGNORECASE),
+         re.compile(r"\b(?:troisième|3e)\s+but\b", re.IGNORECASE),
+         "troisième but"),
+        (re.compile(r"\b(?:equaliser|equalizer|levels?\s+the\s+match)\b", re.IGNORECASE),
+         re.compile(r"\bégalis", re.IGNORECASE),
+         "égalisation"),
+    )
+
     def _facts_check(self, rewritten: str, source: str) -> Optional[str]:
         """Reject any number or score that does not exist in the source."""
         src = source.lower()
@@ -222,6 +245,9 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
             for score in sorted(out_scores):
                 if score not in src_scores:
                     return f"score absent de la source: {score[0]}-{score[1]}"
+        for source_pattern, expected, label in self._ORDINAL_FACTS:
+            if source_pattern.search(source) and not expected.search(rewritten):
+                return f"fait non conservé: {label} attendu"
         return None
 
     def _invalid(self, text: str, source: str = "") -> Optional[str]:
@@ -244,6 +270,8 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
         leak = self._ENGLISH_LEAKS.search(text)
         if leak:
             return f"anglicisme/anglais détecté: « {leak.group(0)} »"
+        if self._RAW_NOTATION.search(text):
+            return "notation brute de remplacement (flèches/pastilles)"
         if re.search(r"[A-Za-zÀ-ÿ](['’])\s", text):
             return "élision cassée (espace après apostrophe)"
         if re.search(r"[A-Za-zÀ-ÿ]'\s+[A-ZÀ-Ý0-9]", text):
@@ -308,7 +336,10 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
                         "'substitution', 'levels'...), vocabulaire football correct "
                         "(égaliser, remplacement, entre en jeu, sort), aucun chiffre "
                         "ni score absent de la source, jamais d'espace après une "
-                        "apostrophe d'élision.\n"
+                        "apostrophe d'élision, aucune flèche ni pastille de couleur "
+                        "(↑ ↓ 🟢 🔴 interdits : écris « X et Y entrent, Z et W sortent »), "
+                        "et conserve le fait exact de la source (un « deuxième but » "
+                        "n'est pas une « égalisation »).\n"
                         "Réécris cette information en français, en respectant le style "
                         f"et le maximum de 260 caractères :\n{model_source}\n"
                         "Réponds uniquement avec le tweet final."

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "barca-twitter-bot"
-version = "1.0.0"
+version = "1.0.1"
 description = "Barcelona football Twitter bot for @UniversCule - monitors sources, rewrites in human-like French, posts with media, replies to comments"
 readme = "README.md"
 requires-python = ">=3.10"
