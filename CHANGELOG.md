@@ -4,6 +4,25 @@ Toutes les évolutions notables de ce projet sont documentées ici.
 Format basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et
 [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [1.1.0] - 2026-10-26
+
+Publication continue, 24h/24.
+
+### Modifié
+
+- **Plage de publication** : `active_hours_start: 0` / `active_hours_end: 24` par défaut.
+  Le bot publie à toute heure (nuit et petit matin compris) au lieu de 8h–23h.
+  La fenêtre reste configurable dans `config.yaml`.
+- Affichage « 24h/24 » dans le panneau de démarrage et les statistiques.
+- Les valeurs par défaut de `SchedulingConfig` suivent ce réglage.
+
+### Inchangé
+
+- Plafond de 80 publications par jour, compté par jour local (`Europe/Madrid`).
+- Plancher d'un post par minute (protection anti-rafale).
+- Limite quotidienne X : report à minuit local + 5 min, sans consommer d'essai.
+- Réponses automatiques toujours désactivées.
+
 ## [1.0.1] - 2026-10-26
 
 Durcissement éditorial après l'analyse de tweets publiés de qualité insuffisante.
@@ -71,3 +90,4 @@ Première version publique du bot @UniversCule.
 
 [1.0.0]: https://github.com/Combocmd/bot_twitter/releases/tag/v1.0.0
 [1.0.1]: https://github.com/Combocmd/bot_twitter/releases/tag/v1.0.1
+[1.1.0]: https://github.com/Combocmd/bot_twitter/releases/tag/v1.1.0

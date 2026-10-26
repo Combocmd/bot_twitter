@@ -130,8 +130,8 @@ class BlacklistConfig(BaseModel):
 
 
 class SchedulingConfig(BaseModel):
-    active_hours_start: int = 8
-    active_hours_end: int = 23
+    active_hours_start: int = 0
+    active_hours_end: int = 24
     timezone: str = "Europe/Madrid"
     max_tweets_per_day: int = 80
     # The remaining slots are reserved for replies when replies are enabled.
@@ -153,6 +153,13 @@ class SchedulingConfig(BaseModel):
         if self.original_tweets_per_day > self.max_tweets_per_day:
             raise ValueError("original_tweets_per_day cannot exceed max_tweets_per_day")
         return self
+
+    @property
+    def active_hours_label(self) -> str:
+        """Human label for the publishing window (0-24 means always on)."""
+        if self.active_hours_start == 0 and self.active_hours_end >= 24:
+            return "24h/24"
+        return f"{self.active_hours_start}h–{self.active_hours_end}h"
 
 
 class RepliesConfig(BaseModel):

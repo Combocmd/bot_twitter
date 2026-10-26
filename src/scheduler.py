@@ -71,9 +71,8 @@ class PostScheduler:
         )
         self.scheduler.start()
         self._running = True
-        logger.info("Planificateur démarré ({}–{}h, max {}/jour)",
-                    self.cfg.active_hours_start, self.cfg.active_hours_end,
-                    self.cfg.max_tweets_per_day)
+        logger.info("Planificateur démarré ({}, max {}/jour)",
+                    self.cfg.active_hours_label, self.cfg.max_tweets_per_day)
 
     def stop(self) -> None:
         if self._running:
@@ -404,7 +403,7 @@ class PostScheduler:
             "original_budget": self.cfg.original_tweets_per_day,
             "original_slots_left": self.available_original_slots(),
             "hard_cap": self.cfg.max_tweets_per_day,
-            "active_hours": f"{self.cfg.active_hours_start}h–{self.cfg.active_hours_end}h",
+            "active_hours": self.cfg.active_hours_label,
             "next_slot": (
                 iso_utc(self._get_next_schedule_slot())
                 if self.available_original_slots() > 0 else None

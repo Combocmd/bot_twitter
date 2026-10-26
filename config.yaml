@@ -192,8 +192,8 @@ blacklist_keywords:
     - "leganés"
 
 scheduling:
-  active_hours_start: 8
-  active_hours_end: 23
+  active_hours_start: 0
+  active_hours_end: 24
   timezone: "Europe/Madrid"
   # Plafond configuré du compte : 80 posts originaux maximum par jour
   max_tweets_per_day: 80

@@ -1,6 +1,6 @@
 # 🤖 Barcelona Twitter Bot - @UniversCule
 
-**Version 1.0.1** — voir [CHANGELOG.md](CHANGELOG.md).
+**Version 1.1.0** — voir [CHANGELOG.md](CHANGELOG.md).
 
 Bot Twitter autonome pour le média football **@UniversCule** (FC Barcelona).  
 Surveille 7 comptes sources, réécrit l'info en français naturel, poste avec médias, répond aux commentaires pertinents.
@@ -14,7 +14,7 @@ Surveille 7 comptes sources, réécrit l'info en français naturel, poste avec m
 | **Dédoublonnage sémantique** | Embeddings locales (sentence-transformers) - évite les doublons cross-sources |
 | **Réécriture humaine** | Ollama local (qwen2.5:7b) - style journaliste/supporter, traduction auto → FR |
 | **Support médias** | Télécharge et re-upload images des tweets sources |
-| **Planification humaine** | 8h-23h, 80 max/jour, publication immédiate |
+| **Planification humaine** | 24h/24 (plage configurable), 80 max/jour, publication immédiate |
 | **Réponses intelligentes** | Filtre pertinence + bots, délai 20-30 min, FR uniquement |
 | **100% Gratuit & Local** | Aucune API payante, tout tourne sur votre machine |
 
@@ -112,7 +112,7 @@ python -m src.main start
                                                                       │
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                ▼
 │  REPLIES    │◀───│  SCHEDULER  │◀───│   QUEUE     │    ┌─────────────┐
-│  (20-30 min)│    │  Humain     │    │  (8h-23h)   │◀───│  POST TWEET │
+│  (20-30 min)│    │  Humain     │    │  (24h/24)   │◀───│  POST TWEET │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
 ```
 
