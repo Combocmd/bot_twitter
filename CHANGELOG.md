@@ -4,6 +4,13 @@ Toutes les évolutions notables de ce projet sont documentées ici.
 Format basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et
 [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [1.1.2] - 2026-10-26
+
+### Corrigé
+
+- `arreter.bat` : suppression de `timeout` qui échouait quand l'entrée standard
+  est redirigée ; l'arrêt reste immédiat et le verrou est nettoyé.
+
 ## [1.1.1] - 2026-10-26
 
 Lancement simplifié sous Windows.
@@ -104,3 +111,5 @@ Première version publique du bot @UniversCule.
 [1.0.0]: https://github.com/Combocmd/bot_twitter/releases/tag/v1.0.0
 [1.0.1]: https://github.com/Combocmd/bot_twitter/releases/tag/v1.0.1
 [1.1.0]: https://github.com/Combocmd/bot_twitter/releases/tag/v1.1.0
+[1.1.1]: https://github.com/Combocmd/bot_twitter/releases/tag/v1.1.1
+[1.1.2]: https://github.com/Combocmd/bot_twitter/releases/tag/v1.1.2

@@ -1,6 +1,6 @@
 # 🤖 Barcelona Twitter Bot - @UniversCule
 
-**Version 1.1.1** — voir [CHANGELOG.md](CHANGELOG.md).
+**Version 1.1.2** — voir [CHANGELOG.md](CHANGELOG.md).
 
 Bot Twitter autonome pour le média football **@UniversCule** (FC Barcelona).  
 Surveille 7 comptes sources, réécrit l'info en français naturel, poste avec médias, répond aux commentaires pertinents.
