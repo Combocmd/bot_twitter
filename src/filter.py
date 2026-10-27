@@ -201,9 +201,58 @@ class BarcaFilter:
                                 "compétition seule, sans Barça",
                                 self._language(original, language))
 
+        # Dernier recours : si le tweet mentionne Barcelone/Barça mais que
+        # aucun signal fort n'a été détecté, demander un second avis à Ollama.
+        # Cela évite de rejeter des actualités légitimes (amende, sanction,
+        # décision institutionnelle, etc.) qui n'utilisent pas les mots-clés
+        # attendus par le filtre statique.
+        if bare_barca or identity:
+            llm_decision = self._review_with_ollama(original, source_username or "")
+            if llm_decision:
+                return FilterResult(True, matched, categories,
+                                    "LLM: actualité Barça confirmée",
+                                    self._language(original, language))
+
         return FilterResult(False, matched, categories,
                             "aucun signal Barça suffisant",
                             self._language(original, language))
+
+    # ------------------------------------------------------------------
+    # Second avis LLM pour les cas ambigus
+    # ------------------------------------------------------------------
+
+    def _review_with_ollama(self, text: str, source_username: str) -> bool:
+        """Demande à Ollama si ce tweet concerne l'actualité du FC Barcelona.
+
+        Utilisé uniquement comme second avis quand le filtre statique est
+        incertain. Retourne True si Ollama confirme que c'est du contenu Barça.
+        """
+        try:
+            import ollama
+            client = ollama.Client(host=self.config.ollama.host)
+            model = self.config.ollama.model
+
+            prompt = (
+                "Tu es un filtre éditorial pour un compte Twitter dédié au FC Barcelona. "
+                "Détermine si ce tweet concerne l'actualité du club de football FC Barcelona "
+                "(Barça), ses joueurs, son staff, ses matchs, ses transferts, ses sanctions, "
+                "ou son institution.\n\n"
+                f"Compte source : @{source_username}\n"
+                f"Tweet : {text}\n\n"
+                "Réponds UNIQUEMENT par 'OUI' si c'est du contenu Barça, ou 'NON' sinon. "
+                "Ne rajoute rien d'autre."
+            )
+
+            response = client.chat(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                options={"temperature": 0.2, "num_predict": 50},
+            )
+            result = str(response["message"]["content"] or "").strip().upper()
+            return result.startswith("OUI")
+        except Exception as exc:
+            logger.warning("Second avis LLM impossible pour @{}: {}", source_username, exc)
+            return False  # En cas de doute, on rejette (sécurité)
 
     def get_filter_stats(self, text: str) -> Dict:
         result = self.is_barca_related(text, source_is_barca=False)
