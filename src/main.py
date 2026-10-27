@@ -261,8 +261,12 @@ class BotOrchestrator:
                     )
                     if not filter_result.is_barca:
                         stats["barca_filtered"] += 1
-                        logger.debug("Rejeté (pas Barça) @{}: {} — {}",
-                                     tweet.source_username, tweet.tweet_id, filter_result.reason)
+                        kw = ", ".join(filter_result.matched_keywords[:8]) or "(aucun)"
+                        logger.info(
+                            "Rejeté (pas Barça) @{} {} | raison: {} | mots: {} | langue: {}",
+                            tweet.source_username, tweet.tweet_id,
+                            filter_result.reason, kw, filter_result.language,
+                        )
                         continue
                     in_match = self.match_calendar.match_in_progress()
                     if in_match and not tweet.media_urls:
