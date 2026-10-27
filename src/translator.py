@@ -243,3 +243,96 @@ class ArabicTranslator:
 
 def translate_to_french(text: str, source_lang: str = "ar", config=None) -> Optional[str]:
     return ArabicTranslator(config).translate(text, source_lang)
+
+
+# ------------------------------------------------------------------
+# English -> French fallback (Argos Translate, 100% gratuit et hors ligne)
+# ------------------------------------------------------------------
+
+_ENGLISH_RE = re.compile(r"\b[A-Za-z]{3,}\b")
+
+
+def is_english(text: str) -> bool:
+    """Retourne True si le texte contient des mots anglais détectables."""
+    if not text:
+        return False
+    words = _ENGLISH_RE.findall(text or "")
+    if not words:
+        return False
+    english_markers = {
+        "the", "and", "with", "from", "into", "after", "before", "goal",
+        "shot", "missed", "according", "reports", "substitution", "enters",
+        "comes", "off", "level", "levels", "half-time", "full-time",
+        "kick-off", "lineup", "squad", "player", "team", "club", "match",
+        "win", "win", "scores", "scored", "signs", "signed", "transfer",
+        "deal", "club", "season", "league", "premier", "league", "champions",
+        "sportsmanship", "wing", "full-back", "center-back", "midfielder",
+        "striker", "goalkeeper", "keeper", "clean sheet", "kit",
+        "dressing room", "gaffer", "tottenham", "liverpool", "manchester",
+        "chelsea", "arsenal", "bayern", "juventus", "milan", "napoli",
+    }
+    low_words = {w.lower() for w in words}
+    return bool(low_words & english_markers)
+
+
+class EnglishTranslator:
+    """Traducteur anglais→français basé sur Argos Translate (hors ligne, gratuit).
+
+    Chargé à la paresse uniquement quand une source anglaise apparaît.
+    """
+
+    def __init__(self, config=None):
+        self.config = config or get_config()
+        self._installed = False
+        self._failed = False
+        self._lang = None
+
+    def _ensure_model(self) -> bool:
+        """Télécharge et prépare le modèle en→fr si nécessaire."""
+        if self._installed:
+            return True
+        if self._failed:
+            return False
+        try:
+            import argostranslate.package
+            import argostranslate.translate
+
+            argostranslate.package.update_package_index()
+            available = argostranslate.package.get_available_packages()
+            pkg = None
+            for p in available:
+                if p.from_code == "en" and p.to_code == "fr":
+                    pkg = p
+                    break
+            if pkg is None:
+                self._failed = True
+                logger.warning("Aucun modèle Argos en→fr trouvé")
+                return False
+
+            argostranslate.package.install_from_path(pkg.download())
+            self._installed = True
+            logger.info("Modèle Argos en→fr installé")
+            return True
+        except Exception as exc:
+            self._failed = True
+            logger.warning("Argos Translate en→fr indisponible: {}", exc)
+            return False
+
+    def translate(self, text: str, source_lang: str = "en") -> Optional[str]:
+        text = clean_tweet_text(text)
+        if not text or not is_english(text):
+            return None
+        if not self._ensure_model():
+            return None
+        try:
+            import argostranslate.translate
+            result = argostranslate.translate.translate(text, "en", "fr")
+            return clean_tweet_text(result) or None
+        except Exception as exc:
+            logger.warning("Traduction anglaise impossible: {}", exc)
+            return None
+
+
+def translate_english_to_french(text: str, config=None) -> Optional[str]:
+    """Point d'entrée pour traduire un texte anglais en français."""
+    return EnglishTranslator(config).translate(text)

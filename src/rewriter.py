@@ -375,6 +375,7 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
             )
         last_error = None
         candidate = ""
+        argos_tried = False  # Fallback Argos en→fr utilisé une seule fois
         for attempt in range(3):  # Augmenté à 3 tentatives pour auto-correction
             try:
                 candidate = self._apply_glossary(self._sanitize(self._chat(self.SYSTEM_PROMPT, user_prompt)))
@@ -396,8 +397,28 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
                 if "a montré de la" in low and any(m in low for m in ["sportsmanship", "grace", "class"]):
                     quality_issues.append("Expression mal traduite, reformule correctement")
 
+                # Fallback Argos : Ollama renvoie de l'anglais au lieu du français
+                if error and "langue non française" in error and not argos_tried:
+                    from .translator import translate_english_to_french
+                    translated = translate_english_to_french(original, self.config)
+                    if translated:
+                        argos_tried = True
+                        model_source = translated
+                        logger.info("Fallback Argos en→fr utilisé pour @{}", source_username)
+                        user_prompt = (
+                            f"Compte source : @{source_username}\n"
+                            f"Langue source : fr (traduit de l'anglais via Argos)\n"
+                            f"{citation_info}"
+                            f"Information à transformer en tweet français :\n{translated}\n\n"
+                            "Écris le tweet final maintenant, sans préambule."
+                        )
+                        continue
+
                 if not quality_issues and error is None:
-                    break  # Tout est bon, on sort
+                    # Tout est bon : on poursuit vers les post-traitements
+                    # (citations, Fabrizio Romano, limite de caractères)
+                    # puis retour succès après la boucle.
+                    pass
 
                 # Problèmes détectés, demander une correction
                 if error or quality_issues:

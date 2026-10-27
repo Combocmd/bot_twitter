@@ -32,6 +32,9 @@ rich>=13.0.0
 loguru>=0.7.0
 tzdata>=2024.1
 
+# Free offline translation fallback (English -> French)
+argostranslate>=1.11.0
+
 # Dev dependencies (optional)
 # pytest>=7.4.0
 # pytest-asyncio>=0.21.0
