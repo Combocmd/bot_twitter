@@ -56,7 +56,7 @@ class PostScheduler:
             logger.warning("Éléments interrompus marqués incertains: {}", recovered)
         self.scheduler.add_job(
             self.process_due_tweets,
-            IntervalTrigger(seconds=5),
+            IntervalTrigger(seconds=15),
             id="process_tweets",
             max_instances=1,
             coalesce=True,
