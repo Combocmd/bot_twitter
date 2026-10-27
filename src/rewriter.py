@@ -466,6 +466,10 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
                 last_error = str(exc)
                 logger.warning("Ollama échec réécriture (tentative {}): {}", attempt + 1, exc)
 
+        # S'assurer que last_error est défini si on arrive ici sans succès
+        if last_error is None and not candidate:
+            last_error = "échec inconnu après plusieurs tentatives"
+
         # French source fallback: post a clean version rather than dropping the
         # news entirely if Ollama is temporarily unavailable.
         lang = self._detect_language(original, source_lang)
