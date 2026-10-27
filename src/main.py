@@ -310,16 +310,14 @@ class BotOrchestrator:
                             stats["media_downloaded"] += len(media_paths)
                         except Exception as exc:
                             logger.warning("Médias non téléchargés pour {}: {}", tweet.tweet_id, exc)
-                        if not media_paths:
-                            # Never publish the text alone when the source had
-                            # media: a media post without its image/video is
-                            # misleading for a media account.
-                            stats["errors"] += 1
+                        if not media_paths and tweet.media_urls:
+                            # Fallback: publier le texte sans l'image plutot que de
+                            # perdre le tweet complet. Mieux vaut un tweet sans
+                            # image qu'aucun tweet.
                             logger.warning(
-                                "Média annoncé mais non téléchargeable; tweet ignoré: @{} {}",
+                                "Média annoncé mais non téléchargeable; publication sans image @{} {}",
                                 tweet.source_username, tweet.tweet_id,
                             )
-                            continue
 
                     if dry_run:
                         console.print(

@@ -215,22 +215,29 @@ class XWebClient:
         inputs = page.locator('[data-testid="fileInput"]')
         if inputs.count() == 0:
             raise XWebMediaError("Champ d'import d'image X introuvable")
-        # The last input belongs to the active composer when the home timeline
-        # also has its inline (but hidden) composer.
         inputs = inputs.last
-        try:
-            inputs.set_input_files(valid)
-        except Exception as exc:
-            raise XWebMediaError(f"Import de l'image impossible: {exc}") from exc
+        # Retry automatique sur l'upload d'image (X est parfois capricieux)
+        last_exc: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                inputs.set_input_files(valid)
+                break  # Upload lance avec succes
+            except Exception as exc:
+                last_exc = exc
+                if attempt < 2:
+                    logger.warning(
+                        "Upload media tentative {} echouee, retry: {}", attempt + 1, exc
+                    )
+                    page.wait_for_timeout(2000)
+                else:
+                    raise XWebMediaError(f"Import de l'image impossible apres 3 tentatives: {last_exc}") from last_exc
         # Wait for X to finish its upload and show previews.
-        deadline = time.time() + 45
+        deadline = time.time() + 60
         while time.time() < deadline:
             try:
                 attachments = page.locator('[data-testid="attachments"]')
                 count = attachments.locator('img, video').count()
                 if count == 0:
-                    # X sometimes renders a generic preview rather than an
-                    # img/video element while a video is being processed.
                     count = attachments.locator('[role="progressbar"]').count()
             except Exception:
                 count = 0
@@ -249,9 +256,18 @@ class XWebClient:
                 "Une erreur s'est produite",
             ):
                 if error_text.lower() in body.lower():
+                    # X affiche une erreur: on retry l'upload si possible
+                    if attempt < 2:
+                        logger.warning(
+                            "X signale une erreur d'upload, retry ({}/3): {}",
+                            attempt + 1, error_text,
+                        )
+                        break  # sort de la boucle while, retente le set_input_files
                     raise XWebMediaError(f"Échec du téléversement de l'image: {error_text}")
             page.wait_for_timeout(500)
-        raise XWebMediaError("Délai dépassé pendant le téléversement de l'image")
+        else:
+            # Boucle while terminee sans return ni raise -> delai depasse
+            raise XWebMediaError("Délai dépassé pendant le téléversement de l'image")
 
     @staticmethod
     def _extract_tweet_id(payload: Dict) -> Optional[str]:
@@ -413,7 +429,16 @@ class XWebClient:
                 if not actual:
                     raise XWebError("Le texte n'a pas pu être saisi dans l'éditeur X")
 
-                self._attach_media(page, media_paths)
+                # Upload des medias avec fallback: si ca echoue, on publie sans
+                # les medias plutot que de perdre le tweet complet.
+                if media_paths:
+                    try:
+                        self._attach_media(page, media_paths)
+                    except XWebMediaError as exc:
+                        logger.warning(
+                            "Upload media echoue definitivement, publication sans media: {}", exc
+                        )
+                        media_paths = []
 
                 button = self._find_post_button(page, reply=reply)
                 # Let X finish enabling the button after media processing.
