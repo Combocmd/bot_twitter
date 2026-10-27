@@ -1,5 +1,5 @@
 """
-Test simple pour verifier le fix v1.1.10 - last_error ne doit jamais etre None + fallback traduction
+Test simple pour verifier le fix v1.1.15 - last_error ne doit jamais etre None + anti-mots-inventes
 """
 import sys
 sys.path.insert(0, r"D:\projets\bot_twitter")
@@ -50,10 +50,10 @@ def main():
     print("\n[TEST 3] Verification version...")
     from src import __version__
     print(f"  Version: {__version__}")
-    if __version__ != "1.1.10":
+    if __version__ != "1.1.15":
         print("  [FAIL] Version incorrecte!")
         return False
-    print("  [PASS] Version 1.1.10")
+    print("  [PASS] Version 1.1.15")
     
     print("\n" + "="*60)
     print("TOUS LES TESTS SONT REUSSIS!")

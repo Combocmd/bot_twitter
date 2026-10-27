@@ -111,6 +111,13 @@ Exemples de format attendu :
 - Résumé d'un tweet long : "🚨 BARÇA : DEUX DÉFAITES DE PLUS\n\nLe Barça subit deux défaites consécutives mais la qualité de l'équipe reste intacte, selon le staff technique."
 - Avec l'El Clásico : "🚨 FLICK CRITIQUE LA PERFORMANCE APRÈS L'EL CLÁSICO\n\nLamine Yamal a joué 94,1% des minutes cette saison."
 
+18. INTERDICTION FORMELLE D'INVENTER DES MOTS :
+    - N'invente JAMAIS de mots français qui n'existent pas ("hélicopté", "épart", "dévaste", etc.)
+    - Si tu ne connais pas le mot français exact, utilise un synonyme simple ou reformule
+    - Vérifie que chaque mot existe dans le dictionnaire français avant de l'écrire
+    - Exemple INTERDIT : "XAVI ÉSPART : HÉLIQUÉ PAR LA DÉFAITE" → "épart" et "hélicopté" n'existent pas
+    - Exemple CORRECT : "XAVI : DÉVASTÉ PAR LA DÉFAITE, IL VEUT RETOURNER AU BARÇA"
+
 Rappel : le Barça = bleu et rouge (💙❤️ ou 🔵🔴), toujours dans cet ordre !
 """
 
@@ -323,10 +330,30 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
             return "élision incorrecte devant majuscule ou chiffre"
         if re.search(r"[A-Za-zÀ-ÿ]'[0-9]", text):
             return "élision incorrecte devant un chiffre"
+        # Détection des mots français inventés / tronqués / absurdes
+        nonsense = self._check_nonsense_french(text)
+        if nonsense:
+            return nonsense
         if source:
             facts_error = self._facts_check(text, source)
             if facts_error:
                 return facts_error
+        return None
+
+    def _check_nonsense_french(self, text: str) -> Optional[str]:
+        """Détecte les mots français inventés, tronqués ou absurdes."""
+        # 4+ consonnes consécutives (très rare en français)
+        if re.search(r"[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ]{4,}", text):
+            return "séquence de consonnes improbable (mot inventé?)"
+        # Voyelle accentuée en début de mot suivie de 3+ consonnes
+        if re.search(r"\b[àâäéèêëîïôöùûüÿ][bcdfghjklmnpqrstvwxyz]{3,}", text, re.IGNORECASE):
+            return "début de mot suspect (voyelle accentuée + consonne cluster)"
+        # "hélicopt" doit toujours être suivi de "ère" (hélicoptère) ; "héliqu" n'existe pas
+        if re.search(r"hélicopt(?!ère)|héliqu", text, re.IGNORECASE):
+            return "mot tronqué ou inventé détecté"
+        # Mots finissant par des fragments absurdes (pas de mots français valides)
+        if re.search(r"\b\w+(?:pté|qté|épart|éspart|spart)\b", text, re.IGNORECASE):
+            return "mot tronqué ou inventé détecté"
         return None
 
     # ------------------------------------------------------------------
@@ -397,6 +424,11 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
                 # Vérifier la cohérence de la phrase
                 if "a montré de la" in low and any(m in low for m in ["sportsmanship", "grace", "class"]):
                     quality_issues.append("Expression mal traduite, reformule correctement")
+
+                # Détection des mots français inventés ou absurdes
+                nonsense = self._check_nonsense_french(candidate)
+                if nonsense:
+                    quality_issues.append(nonsense)
 
                 # Fallback Argos : Ollama renvoie de l'anglais ou de l'espagnol au lieu du français
                 if error and "langue non française" in error:
