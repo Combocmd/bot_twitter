@@ -121,6 +121,15 @@ Exemples de format attendu :
     - Vérifie que chaque mot existe dans le dictionnaire français avant de l'écrire
     - Exemple INTERDIT : "XAVI ÉSPART : HÉLIQUÉ PAR LA DÉFAITE" → "épart" et "hélicopté" n'existent pas
     - Exemple CORRECT : "XAVI : DÉVASTÉ PAR LA DÉFAITE, IL VEUT RETOURNER AU BARÇA"
+19. TERMES PROTÉGÉS (__PROTECTED_X__) :
+    - Certains mots du texte sont remplacés par des identifiants comme __PROTECTED_0__, __PROTECTED_1__, etc.
+    - NE JAMAIS traduire, modifier ou supprimer ces identifiants.
+    - Les laisser exactement tels quels dans ton texte final.
+    - Ils seront restaurés automatiquement après ta réponse.
+20. Exemples de termes à ne PAS toucher :
+    - __PROTECTED_0__ = BREAKING (ne pas traduire en "breaking" ou "actualité")
+    - __PROTECTED_1__ = Kopa Trophy (ne pas traduire en "trophée Kopa")
+    - __PROTECTED_2__ = Lamine Yamal (ne pas modifier en "Lamyal" ou "Yamel")
 
 Rappel : le Barça = bleu et rouge (💙❤️ ou 🔵🔴), toujours dans cet ordre !
 """
@@ -256,6 +265,100 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
         "second": "2", "deuxième": "2", "third": "3", "troisième": "3",
         "fourth": "4", "fifth": "5", "brace": "2", "hat-trick": "3",
     }
+
+    # Terms that must NEVER be translated or modified by the AI.
+    # Longest keys first so "Kopa Trophy" is protected before "Kopa" alone.
+    _PROTECTED_TERMS: Dict[str, str] = {
+        # Trophy names (never translate)
+        "Kopa Trophy": "Kopa Trophy",
+        "Ballon d'Or": "Ballon d'Or",
+        "Ballon d'or": "Ballon d'Or",
+        "Ballon d or": "Ballon d'Or",
+        # Alert words (keep in English at start of headline)
+        "BREAKING": "BREAKING",
+        "JUST IN": "JUST IN",
+        "URGENT": "URGENT",
+        "OFFICIEL": "OFFICIEL",
+        "EXCLU": "EXCLU",
+        # Player names (never modify)
+        "Lamine Yamal": "Lamine Yamal",
+        "Pau Cubarsi": "Pau Cubarsi",
+        "Pau Cubarsí": "Pau Cubarsi",
+        "Pedri": "Pedri",
+        "Gavi": "Gavi",
+        "Lewandowski": "Lewandowski",
+        "Raphinha": "Raphinha",
+        "Frenkie de Jong": "Frenkie de Jong",
+        "Ter Stegen": "Ter Stegen",
+        "Koundé": "Koundé",
+        "Araújo": "Araújo",
+        "Balde": "Balde",
+        "Fermín": "Fermín",
+        "Dani Olmo": "Dani Olmo",
+        "Ferran Torres": "Ferran Torres",
+        "Ansu Fati": "Ansu Fati",
+        "Eric García": "Eric García",
+        "Iñigo Martínez": "Iñigo Martínez",
+        "Hansi Flick": "Hansi Flick",
+        "Deco": "Deco",
+        "Joan Laporta": "Joan Laporta",
+        "Laporta": "Laporta",
+        # Club names
+        "Barça": "Barça",
+        "FC Barcelona": "Barça",
+        "FC Barcelone": "Barça",
+        "FCB": "Barça",
+        "Barcelona": "Barça",
+        # Competitions
+        "La Liga": "la Liga",
+        "Champions League": "Ligue des champions",
+        "Champions": "Ligue des champions",
+        "Liga": "la Liga",
+        "Copa del Rey": "Coupe du Roi",
+        "Supercopa": "Supercoupe",
+        # El Clasico
+        "El Clásico": "l'El Clásico",
+        "El Clasico": "l'El Clásico",
+        "le Clasico": "l'El Clásico",
+        "le Classique": "l'El Clásico",
+    }
+
+    def _protect_terms(self, text: str) -> tuple[str, Dict[str, str]]:
+        """Remplace les termes protégés par des identifiants temporaires.
+
+        Retourne (texte_protégé, mapping_identifiant_vers_terme_original).
+        Les termes les plus longs sont protégés en premier pour éviter les
+        remplacements partiels.
+        """
+        mapping: Dict[str, str] = {}
+        protected = text
+        # Sort by length descending so "Kopa Trophy" is matched before "Kopa".
+        for term in sorted(self._PROTECTED_TERMS.keys(), key=len, reverse=True):
+            if not term:
+                continue
+            placeholder = f"__PROTECTED_{len(mapping)}__"
+            # Case-insensitive match but preserve the original term for restoration.
+            pattern = re.compile(re.escape(term), re.IGNORECASE)
+            matches = list(pattern.finditer(protected))
+            # Replace from right to left to keep positions valid.
+            for match in reversed(matches):
+                protected = protected[:match.start()] + placeholder + protected[match.end():]
+                mapping[placeholder] = term
+        return protected, mapping
+
+    def _restore_terms(self, text: str, mapping: Dict[str, str]) -> str:
+        """Restaure les termes protégés depuis leurs identifiants temporaires."""
+        restored = text
+        for placeholder, original in mapping.items():
+            restored = restored.replace(placeholder, original)
+        return restored
+
+    def _verify_protected_restored(self, text: str, mapping: Dict[str, str]) -> Optional[str]:
+        """Vérifie que tous les identifiants temporaires ont été restaurés."""
+        for placeholder in mapping:
+            if placeholder in text:
+                return f"identifiant temporaire non restauré: {placeholder}"
+        return None
 
     def _apply_glossary(self, text: str) -> str:
         for pattern, replacement in self._GLOSSARY_FIXES:
@@ -422,11 +525,15 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
             if literal_translation:
                 model_source = literal_translation
                 logger.debug("Traduction littérale arabe: {}", literal_translation[:160])
+
+        # Protéger les termes critiques AVANT d'envoyer à Ollama
+        # (BREAKING, Kopa Trophy, noms joueurs, etc.) pour éviter qu'il les traduise.
+        protected_source, protected_mapping = self._protect_terms(model_source)
         if literal_translation:
             user_prompt = (
                 f"Compte source : @{source_username}\n"
                 "Traduction littérale fidèle d'un tweet arabe :\n"
-                f"{literal_translation}\n\n"
+                f"{protected_source}\n\n"
                 "Transforme cette traduction en tweet français naturel, en corrigeant "
                 "les maladresses sans changer les faits, les noms ou les chiffres. "
                 "N'ajoute aucune information absente. Écris le tweet final maintenant, "
@@ -442,7 +549,7 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
                 f"Compte source : @{source_username}\n"
                 f"Langue source : {source_lang or 'auto'}\n"
                 f"{citation_info}"
-                f"Information à transformer en tweet français :\n{original}\n\n"
+                f"Information à transformer en tweet français :\n{protected_source}\n\n"
                 "Écris le tweet final maintenant, sans préambule."
             )
         last_error = None
@@ -452,6 +559,12 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
         for attempt in range(3):  # Augmenté à 3 tentatives pour auto-correction
             try:
                 candidate = self._apply_glossary(self._sanitize(self._chat(self.SYSTEM_PROMPT, user_prompt)))
+                # Restaurer les termes protégés (__PROTECTED_X__ -> terme original)
+                candidate = self._restore_terms(candidate, protected_mapping)
+                # Vérifier qu'aucun identifiant temporaire n'est resté
+                unreplaced = self._verify_protected_restored(candidate, protected_mapping)
+                if unreplaced:
+                    quality_issues.append(unreplaced)
                 candidate = self._post_correct_french(candidate)
                 error = self._invalid(candidate, model_source)
 
