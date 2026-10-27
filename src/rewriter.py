@@ -67,9 +67,9 @@ RÈGLES ABSOLUES :
 9. Pas de point d'exclamation à répétition. Les emojis sont autorisés avec parcimonie.
 10. Jamais d'espace après une apostrophe d'élision ("l'égalisation", pas "l' égalisation").
 11. Ne mélange JAMAIS l'anglais et le français : "the", "goal", "substitution", "enters", "levels" sont interdits dans le tweet final.
-12. Changements : écris une phrase française claire, jamais de flèches ni de pastilles de couleur.
-    Format attendu : "Double changement pour le Barça à la 85e : Adeyemi et Gabriel Jesus entrent, Gordon et Raphinha sortent."
-    Interdits dans le tweet final : ↑ ↓ ⬆ ⬇ 🟢 🔴 et toute notation brute de type "↑🟢 Joueur".
+12. Changements : écris une phrase française claire. Les emojis sont autorisés (↑ ↓ 🟢 🔴 ✅ ❌ etc.).
+    Format accepté : "Double changement pour le Barça à la 85e : ↑🟢 Adeyemi, ↑🟢 Gabriel Jesus ↓🔴 Gordon, ↓🔴 Raphinha"
+    Ou en français : "Double changement pour le Barça à la 85e : Adeyemi et Gabriel Jesus entrent, Gordon et Raphinha sortent."
 13. ANGLICISMES INTERDITS :
     - "website" → "site web"
     - "award" → "trophée" ou "prix"
@@ -83,12 +83,24 @@ RÈGLES ABSOLUES :
     - Contenu en lettres normales
     - Si le tweet original cite une source (@username, "selon @xx", "Source: @xx"), conserve cette citation
     - Ne PAS ajouter de source si le tweet original n'en cite pas
+15. GRAMMAIRE ET STYLE :
+    - Utilise "le Barça" ou "Barça" (jamais "Barca" sans accent)
+    - Accords corrects (pluriel, genre)
+    - Ponctuation française (espace avant : ; ! ?)
+    - Si le tweet original contient une citation entre guillemets, la réintégrer naturellement
+    - Ex: "@X dit: 'Le Barça va gagner'" → "Le Barça va gagner, affirme @X"
+16. RÉSUMÉ ET LONGUEUR :
+    - Si le tweet est trop long, résume l'essentiel sans perdre le fait principal
+    - Conserve les informations clés : qui, quoi, quand, où
+    - Supprime les détails superflus mais garde le sens
 
 Exemples de format attendu :
 - "🚨🚨🚨 KOUNDÉ ET CHRISTENSEN : DES RETOURS ESPÉRÉS \n\nHansi Flick espère récupérer Jules Koundé pour affronter Alavés et Andreas Christensen pour le match contre l'Atlético de Madrid."
 - "🌕🚨 LA DÉLÉGATION DU BARÇA VIENT D'ATTERRIR À LONDRES ! ✈️\n\nLes Blaugrana se dirigent désormais vers leur hôtel avant la cérémonie du Ballon d'Or ce soir."
 - "🚨 LE BARÇA DÉVOILE UNE VIDÉO SPÉCIALE AVANT LA CÉRÉMONIE DU BALLON D'OR 🤩\n\n12 maillots, des joueuses et des joueurs mis à l'honneur… 💙🔴"
 - Avec source citée DANS le tweet : "🚨 FERRAN TORRES 16E DU BALLON D'OR 🏆\n\nL'attaquant espagnol termine 16e du vote, selon @Barca_buzz."
+- Avec citation : "🚨 XABI ALCASA : 'JE VEUX RETOURNER AU BARÇA' 💙🔴\n\nLe milieu espagnol confirme son désir de revenir au club catalan."
+- Résumé d'un tweet long : "🚨 BARÇA : DEUX DÉFAITES DE PLUS\n\nLe Barça subit deux défaites consécutives mais la qualité de l'équipe reste intacte, selon le staff technique."
 
 Rappel : le Barça = bleu et rouge (💙🔴), toujours dans cet ordre !
 """
@@ -190,9 +202,6 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
         r"entrent|sort|changement|remplacement|égalise|victoire|défaite)\b",
         re.IGNORECASE,
     )
-    # Raw substitution notation copied from the source (arrows/coloured dots)
-    # is not publishable by a media account.
-    _RAW_NOTATION = re.compile(r"[↑↓⬆⬇🟢🔴🟥]")
     # English words that must never survive into a French media tweet.
     # NB: "match", "score" and "chance" are valid French words and are NOT leaks.
     _ENGLISH_LEAKS = re.compile(
@@ -299,8 +308,6 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
         for anglicism in ["website", "web site", "award", "announcement", "update", "coming", "news"]:
             if anglicism in low:
                 return f"anglicisme détecté: « {anglicism} »"
-        if self._RAW_NOTATION.search(text):
-            return "notation brute de remplacement (flèches/pastilles)"
         if re.search(r"[A-Za-zÀ-ÿ](['’])\s", text):
             return "élision cassée (espace après apostrophe)"
         if re.search(r"[A-Za-zÀ-ÿ]'\s+[A-ZÀ-Ý0-9]", text):
