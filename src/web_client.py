@@ -324,7 +324,7 @@ class XWebClient:
             return " | ".join(m for m in messages if m)[:800]
         return None
 
-    def _click_and_capture(self, page, button, timeout: int = 45000) -> Dict:
+    def _click_and_capture(self, page, button, timeout: int = 75000) -> Dict:
         try:
             with page.expect_response(
                 lambda r: "/graphql/" in r.url and "CreateTweet" in r.url,
@@ -365,7 +365,7 @@ class XWebClient:
                 if match:
                     return {"data": {"create_tweet": {"tweet_results": {"result": {"rest_id": match.group(1)}}}}}
             raise XWebUncertainError(
-                f"Pas de réponse CreateTweet après 45 s. Toast: {toast_text[:200] or 'aucun'}"
+                f"Pas de réponse CreateTweet après 75 s. Toast: {toast_text[:200] or 'aucun'}"
             ) from exc
 
     # ------------------------------------------------------------------

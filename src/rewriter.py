@@ -63,10 +63,13 @@ RÈGLES ABSOLUES :
    - El Clasico = le Clasico ; La Liga = la Liga
    - "boosted" (réseaux sociaux) = mis en avant / sponsorisé, selon le contexte
 7. Ne traduis pas les noms propres, les surnoms de joueurs ni les noms de clubs.
+   - NE JAMAIS modifier un nom propre : "Yamal" reste "Yamal" (jamais "Lamyal"), "Cubarsi" reste "Cubarsi", "Barça" reste "Barça" (jamais "Barca")
+   - Si un nom semble coupé ou transformé, c'est une erreur à corriger
 8. N'invente AUCUN chiffre, score, statistique, date ou nom absent de la source.
 9. Pas de point d'exclamation à répétition. Les emojis sont autorisés avec parcimonie.
 10. Jamais d'espace après une apostrophe d'élision ("l'égalisation", pas "l' égalisation").
 11. Ne mélange JAMAIS l'anglais et le français : "the", "goal", "substitution", "enters", "levels" sont interdits dans le tweet final.
+    SAUF les mots d'alerte en début de tweet : "BREAKING", "JUST IN", "URGENT", "OFFICIEL", "EXCLU" peuvent être conservés en anglais s'ils sont en début de headline.
 12. Changements : écris une phrase française claire. Les emojis sont autorisés (↑ ↓ 🟢 🔴 ✅ ❌ etc.).
     Format accepté : "Double changement pour le Barça à la 85e : ↑🟢 Adeyemi, ↑🟢 Gabriel Jesus ↓🔴 Gordon, ↓🔴 Raphinha"
     Ou en français : "Double changement pour le Barça à la 85e : Adeyemi et Gabriel Jesus entrent, Gordon et Raphinha sortent."
@@ -87,11 +90,12 @@ RÈGLES ABSOLUES :
 15. GRAMMAIRE ET STYLE :
     - Utilise "le Barça" ou "Barça" (jamais "Barca" sans accent)
     - Articles corrects : "l'El Clásico" (avant voyelle), "le Classique", "la Liga"
-    - Accords corrects (pluriel, genre)
+    - Accords corrects (pluriel, genre) : "premier match" (masculin), "première victoire" (féminin), "sa première" (pas "Sa première")
     - Ponctuation française (espace avant : ; ! ?)
     - Si le tweet original contient une citation entre guillemets, la réintégrer naturellement
     - Ex: "@X dit: 'Le Barça va gagner'" → "Le Barça va gagner, affirme @X"
     - Vocabulaire professionnel : éviter "fresque", préférer "performance", "représentation", "match"
+    - NE JAMAIS laisser une phrase incomplète ou coupée en fin de tweet
 16. RÉSUMÉ ET LONGUEUR :
     - Si le tweet est trop long, résume l'essentiel sans perdre le fait principal
     - Conserve les informations clés : qui, quoi, quand, où
@@ -258,6 +262,47 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
             text = pattern.sub(replacement, text)
         return text
 
+    def _post_correct_french(self, text: str) -> str:
+        """Post-correction automatique des erreurs courantes de traduction."""
+        if not text:
+            return text
+
+        # 1. Noms propres - corrections obligatoires
+        # "LAMYAL" -> "YAMAL" (doit etre avant la regle ci-dessous)
+        text = re.sub(r"\bLAMYAL\b", "YAMAL", text)
+        text = re.sub(r"\bLamyal\b", "Yamal", text)
+        # "Lamy al" (avec espace) -> "Lamine Yamal"
+        text = re.sub(r"\bLamy\b\s+\bal\b", "Lamine Yamal", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bLamyAl\b", "Lamine Yamal", text)
+        # "Pa" seul avant Cubarsi -> "Pau"
+        text = re.sub(r"\bPa\s+Cubarsi\b", "Pau Cubarsi", text)
+        text = re.sub(r"\bPa\b\s+", "Pau ", text)
+
+        # 2. Accords de genre
+        # "première match" -> "premier match" (match est masculin)
+        text = re.sub(r"\bpremière\s+match\b", "premier match", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bPremière\s+match\b", "Premier match", text)
+        # "Sa première" -> "sa première" (minuscule au milieu de phrase)
+        text = re.sub(r"\bSa\s+première\b", "sa première", text)
+
+        # 3. Majuscules incorrectes au milieu des mots
+        # "Match" au milieu -> "match" (sauf en début de phrase)
+        text = re.sub(r"(?<=\s)Match\b", "match", text)
+        text = re.sub(r"(?<=\s)Disputera\b", "disputera", text)
+        text = re.sub(r"(?<=\s)Première\b", "première", text)
+
+        # 4. Phrase coupée - si le tweet ne se termine pas par une ponctuation
+        text = text.strip()
+        if text and text[-1] not in {".", "!", "?", "…", ":", ";"}:
+            # Vérifier que ce n'est pas un emoji final (déjà acceptable)
+            if not re.search(r"[\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]$", text):
+                text = text + "."
+
+        # 5. Nettoyer les doubles espaces
+        text = re.sub(r" {2,}", " ", text)
+
+        return text
+
     @staticmethod
     def _numbers(text: str) -> set:
         return set(re.findall(r"\d+", text))
@@ -407,6 +452,7 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
         for attempt in range(3):  # Augmenté à 3 tentatives pour auto-correction
             try:
                 candidate = self._apply_glossary(self._sanitize(self._chat(self.SYSTEM_PROMPT, user_prompt)))
+                candidate = self._post_correct_french(candidate)
                 error = self._invalid(candidate, model_source)
 
                 # Vérifications qualité supplémentaires
@@ -429,6 +475,10 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
                 nonsense = self._check_nonsense_french(candidate)
                 if nonsense:
                     quality_issues.append(nonsense)
+
+                # Détection de phrase incomplète (se termine par une lettre, pas de ponctuation)
+                if candidate and candidate[-1].isalpha() and candidate[-1] not in {".", "!", "?", "…"}:
+                    quality_issues.append("phrase incomplète ou coupée à la fin du tweet")
 
                 # Fallback Argos : Ollama renvoie de l'anglais ou de l'espagnol au lieu du français
                 if error and "langue non française" in error:
