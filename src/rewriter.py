@@ -375,30 +375,54 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
             )
         last_error = None
         candidate = ""
-        for attempt in range(2):
+        for attempt in range(3):  # Augmenté à 3 tentatives pour auto-correction
             try:
                 candidate = self._apply_glossary(self._sanitize(self._chat(self.SYSTEM_PROMPT, user_prompt)))
                 error = self._invalid(candidate, model_source)
-                if error and attempt == 0:
-                    last_error = error
-                    user_prompt = (
-                        f"Ta réponse précédente était invalide ({error}).\n"
-                        "Rappels impératifs : 100% français (jamais 'the', 'goal', "
-                        "'substitution', 'levels'...), vocabulaire football correct "
-                        "(égaliser, remplacement, entre en jeu, sort), aucun chiffre "
-                        "ni score absent de la source, jamais d'espace après une "
-                        "apostrophe d'élision, aucune flèche ni pastille de couleur "
-                        "(↑ ↓ 🟢 🔴 interdits : écris « X et Y entrent, Z et W sortent »), "
-                        "et conserve le fait exact de la source (un « deuxième but » "
-                        "n'est pas une « égalisation »).\n"
-                        "Réécris cette information en français, en respectant le style "
-                        f"et le maximum de 260 caractères :\n{model_source}\n"
-                        "Réponds uniquement avec le tweet final."
-                    )
-                    continue
-                if error:
-                    last_error = error
-                    break
+
+                # Vérifications qualité supplémentaires
+                quality_issues = []
+                low = candidate.lower()
+
+                # Anglicismes courants du football
+                anglicisms = ["sportsmanship", "wing", "full-back", "center-back", "midfielder",
+                              "striker", "goalkeeper", "keeper", "clean sheet", "kit",
+                              "dressing room", "gaffer", "skysports", "tottenham"]
+                for ang in anglicisms:
+                    if ang in low:
+                        quality_issues.append(f"'{ang}' est anglais, utilise 'fair-play', 'ailier', 'latéral', 'défenseur central', 'milieu', 'attaquant', 'gardien', 'clean sheet → feuille blanche', 'vestiaires', 'entraîneur', 'Sky Sports', 'Tottenham'")
+
+                # Vérifier la cohérence de la phrase
+                if "a montré de la" in low and any(m in low for m in ["sportsmanship", "grace", "class"]):
+                    quality_issues.append("Expression mal traduite, reformule correctement")
+
+                if not quality_issues and error is None:
+                    break  # Tout est bon, on sort
+
+                # Problèmes détectés, demander une correction
+                if error or quality_issues:
+                    last_error = error or ", ".join(quality_issues)
+                    if attempt < 2:  # Pas la dernière tentative
+                        fix_instructions = []
+                        if error:
+                            fix_instructions.append(f"Corrige: {error}")
+                        fix_instructions.extend(quality_issues)
+
+                        user_prompt = (
+                            f"Correction requise pour ton tweet précédent.\n"
+                            f"Problèmes détectés: {'; '.join(fix_instructions)}\n\n"
+                            f"Consignes:\n"
+                            f"- 100% français, ZÉRO anglicisme\n"
+                            f"- Phrases cohérentes et qui ont du sens\n"
+                            f"- Style journaliste sportif français professionnel\n"
+                            f"- Maximum 260 caractères\n\n"
+                            f"Réécris ce tweet en français correct :\n{model_source}\n"
+                            "Réponds uniquement avec le tweet corrigé."
+                        )
+                        continue
+                    else:
+                        last_error = error or ", ".join(quality_issues)
+                        break
                 if weighted_length(candidate) > 260:
                     # Ask once for a shorter version.
                     try:
