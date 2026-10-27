@@ -467,8 +467,16 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
                 logger.warning("Ollama échec réécriture (tentative {}): {}", attempt + 1, exc)
 
         # S'assurer que last_error est défini si on arrive ici sans succès
-        if last_error is None and not candidate:
-            last_error = "échec inconnu après plusieurs tentatives"
+        if last_error is None:
+            if not candidate:
+                last_error = "échec inconnu: candidat vide après plusieurs tentatives"
+            else:
+                # Le candidat existe mais n'a pas passé les vérifications
+                error_check = self._invalid(candidate, model_source)
+                if error_check:
+                    last_error = error_check
+                else:
+                    last_error = "échec inconnu: le candidat semble valide mais la réécriture a échoué"
 
         # French source fallback: post a clean version rather than dropping the
         # news entirely if Ollama is temporarily unavailable.
