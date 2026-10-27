@@ -375,7 +375,8 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
             )
         last_error = None
         candidate = ""
-        argos_tried = False  # Fallback Argos en→fr utilisé une seule fois
+        argos_tried_en = False  # Fallback Argos en→fr utilisé une fois
+        argos_tried_es = False  # Fallback Argos es→fr utilisé une fois
         for attempt in range(3):  # Augmenté à 3 tentatives pour auto-correction
             try:
                 candidate = self._apply_glossary(self._sanitize(self._chat(self.SYSTEM_PROMPT, user_prompt)))
@@ -397,22 +398,38 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
                 if "a montré de la" in low and any(m in low for m in ["sportsmanship", "grace", "class"]):
                     quality_issues.append("Expression mal traduite, reformule correctement")
 
-                # Fallback Argos : Ollama renvoie de l'anglais au lieu du français
-                if error and "langue non française" in error and not argos_tried:
-                    from .translator import translate_english_to_french
-                    translated = translate_english_to_french(original, self.config)
-                    if translated:
-                        argos_tried = True
-                        model_source = translated
-                        logger.info("Fallback Argos en→fr utilisé pour @{}", source_username)
-                        user_prompt = (
-                            f"Compte source : @{source_username}\n"
-                            f"Langue source : fr (traduit de l'anglais via Argos)\n"
-                            f"{citation_info}"
-                            f"Information à transformer en tweet français :\n{translated}\n\n"
-                            "Écris le tweet final maintenant, sans préambule."
-                        )
-                        continue
+                # Fallback Argos : Ollama renvoie de l'anglais ou de l'espagnol au lieu du français
+                if error and "langue non française" in error:
+                    if not argos_tried_en:
+                        from .translator import translate_english_to_french
+                        translated = translate_english_to_french(original, self.config)
+                        if translated:
+                            argos_tried_en = True
+                            model_source = translated
+                            logger.info("Fallback Argos en→fr utilisé pour @{}", source_username)
+                            user_prompt = (
+                                f"Compte source : @{source_username}\n"
+                                f"Langue source : fr (traduit de l'anglais via Argos)\n"
+                                f"{citation_info}"
+                                f"Information à transformer en tweet français :\n{translated}\n\n"
+                                "Écris le tweet final maintenant, sans préambule."
+                            )
+                            continue
+                    elif not argos_tried_es:
+                        from .translator import ollama_translate_to_french
+                        translated = ollama_translate_to_french(original, "es", self.config)
+                        if translated:
+                            argos_tried_es = True
+                            model_source = translated
+                            logger.info("Fallback Ollama es→fr utilisé pour @{}", source_username)
+                            user_prompt = (
+                                f"Compte source : @{source_username}\n"
+                                f"Langue source : fr (traduit de l'espagnol via Ollama)\n"
+                                f"{citation_info}"
+                                f"Information à transformer en tweet français :\n{translated}\n\n"
+                                "Écris le tweet final maintenant, sans préambule."
+                            )
+                            continue
 
                 if not quality_issues and error is None:
                     # Tout est bon : on poursuit vers les post-traitements

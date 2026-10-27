@@ -336,3 +336,60 @@ class EnglishTranslator:
 def translate_english_to_french(text: str, config=None) -> Optional[str]:
     """Point d'entrée pour traduire un texte anglais en français."""
     return EnglishTranslator(config).translate(text)
+
+
+# ------------------------------------------------------------------
+# Spanish -> French fallback (Argos Translate, 100% gratuit et hors ligne)
+# ------------------------------------------------------------------
+
+# ------------------------------------------------------------------
+# Traduction générique vers le français via Ollama (fallback pour
+# toute langue non-arabe : anglais, espagnol, italien, portugais, etc.)
+# Utilise le modèle local déjà chargé (qwen2.5:7b) pour traduire
+# d'abord vers le français, puis laisse Ollama réécrire en tweet.
+# ------------------------------------------------------------------
+
+def ollama_translate_to_french(text: str, source_lang: str = "auto", config=None, client=None) -> Optional[str]:
+    """Traduit un texte vers le français en utilisant Ollama directement.
+
+    Utile quand le modèle Argos n'est pas disponible pour une paire de langues
+    donnee (par exemple espagnol->francais n'existe pas en package direct).
+    """
+    text = clean_tweet_text(text)
+    if not text:
+        return None
+
+    cfg = config or get_config()
+    if client is None:
+        import ollama
+        client = ollama.Client(host=cfg.ollama.host)
+
+    model = cfg.ollama.model
+    prompt = (
+        "Tu es un traducteur professionnel. Traduis le texte suivant en français "
+        "naturel, sans ajouter d'information, sans inventer de faits, sans changer "
+        "les noms propres (joueurs, clubs, entraineurs).\n"
+        "Texte a traduire :\n"
+        + text
+        + "\n\n"
+        "Reponds uniquement avec la traduction francaise, sans preambule."
+    )
+    try:
+        response = client.chat(
+            model=model,
+            messages=[
+                {"role": "system", "content": "Tu traduis vers le francais de maniere fidele et naturelle."},
+                {"role": "user", "content": prompt},
+            ],
+            options={
+                "temperature": 0.3,
+                "num_predict": 220,
+            },
+        )
+        message = response["message"]["content"]
+        return clean_tweet_text(str(message or "").strip()) or None
+    except Exception as exc:
+        logger.warning("Traduction Ollama vers francais impossible: {}", exc)
+        return None
+
+
