@@ -69,6 +69,13 @@ class PostScheduler:
             max_instances=1,
             coalesce=True,
         )
+        self.scheduler.add_job(
+            self._cleanup_old_tweets,
+            IntervalTrigger(seconds=60),
+            id="cleanup_old_tweets",
+            max_instances=1,
+            coalesce=True,
+        )
         self.scheduler.start()
         self._running = True
         logger.info("Planificateur démarré ({}, max {}/jour)",
@@ -314,6 +321,17 @@ class PostScheduler:
         row = self.db.claim_due_tweet(now_utc())
         if not row:
             return []
+        
+        # Vérifier l'âge du tweet en file d'attente (max 5 minutes)
+        created_at = row.get("created_at")
+        if created_at:
+            tweet_age = now_utc() - parse_dt(created_at)
+            if tweet_age > timedelta(minutes=5):
+                logger.warning("Tweet #{} trop vieux ({} min). Supprimé de la file.", 
+                              row["id"], int(tweet_age.total_seconds() / 60))
+                self.db.set_queue_failed(row["id"], "tweet trop ancien (>5 minutes)")
+                return []
+        
         result = self._post_queued_tweet(row)
         return [result] if result else []
 
@@ -431,3 +449,19 @@ class PostScheduler:
             self.db.cleanup_old_data(days=30)
         except Exception as exc:
             logger.warning("Nettoyage impossible: {}", exc)
+
+    def _cleanup_old_tweets(self) -> None:
+        """Supprime les tweets en file d'attente depuis plus de 5 minutes."""
+        cutoff = now_utc() - timedelta(minutes=5)
+        try:
+            with self.db.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT id, created_at FROM posting_queue WHERE status='pending' AND created_at<?",
+                    (iso_utc(cutoff),),
+                ).fetchall()
+                for row in rows:
+                    queue_id = row["id"]
+                    logger.warning("Tweet #{} trop ancien (créé il y a plus de 5 min). Supprimé.", queue_id)
+                    self.db.set_queue_failed(queue_id, "tweet trop ancien (>5 minutes)")
+        except Exception as exc:
+            logger.warning("Nettoyage des tweets anciens impossible: {}", exc)
