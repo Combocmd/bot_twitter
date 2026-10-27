@@ -9,13 +9,13 @@ x_web:
   profile_dir: "data/x_universcule_profile"
   expected_handle: "UniversCule"
   headless: true
-  timeout_seconds: 45
+  timeout_seconds: 60
 
 # Lecture publique via la session Firefox @XenoSama__ (cookies importés)
 x_reader:
   state_file: "data/x_reader_state.json"
   headless: true
-  timeout_seconds: 45
+  timeout_seconds: 90
 
 ollama:
   host: "http://localhost:11434"

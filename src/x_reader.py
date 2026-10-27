@@ -346,12 +346,33 @@ class XReader:
                 captured = self._attach_capture(
                     page, ("UserOriginalsTimeline", "UserTweets", "UserTweetsAndReplies")
                 )
+                # Retry une fois si X est lent (timeout ou erreur passagere)
+                for attempt in range(2):
+                    try:
+                        await page.goto(
+                            f"https://x.com/{username}",
+                            wait_until="domcontentloaded",
+                            timeout=self.timeout_seconds * 1000,
+                        )
+                        break  # Chargement reussi, on sort de la boucle retry
+                    except Exception as exc:
+                        if attempt == 0:
+                            logger.warning(
+                                "Lecture de @{} tentative {} echouee, retry: {}",
+                                username, attempt + 1, exc,
+                            )
+                            # Nouvelle page pour le retry (l'ancienne peut etre invalide)
+                            await page.close()
+                            page = await context.new_page()
+                            page.set_default_timeout(self.timeout_seconds * 1000)
+                            captured = self._attach_capture(
+                                page, ("UserOriginalsTimeline", "UserTweets", "UserTweetsAndReplies")
+                            )
+                        else:
+                            self.last_errors[username] = str(exc)[:300]
+                            logger.warning("Lecture de @{} impossible: {}", username, exc)
+                            raise
                 try:
-                    await page.goto(
-                        f"https://x.com/{username}",
-                        wait_until="domcontentloaded",
-                        timeout=self.timeout_seconds * 1000,
-                    )
                     await self._wait_capture(page, captured)
                     tweets: List[ReadTweet] = []
                     for op, data in captured:
@@ -382,6 +403,7 @@ class XReader:
                     logger.warning("Lecture de @{} impossible: {}", username, exc)
                 finally:
                     await page.close()
+
         except Exception as exc:
             self.last_errors["__all__"] = str(exc)[:500]
             logger.error("Session lecteur Playwright impossible: {}", exc)
@@ -405,15 +427,33 @@ class XReader:
                 page = await context.new_page()
                 page.set_default_timeout(self.timeout_seconds * 1000)
                 captured = self._attach_capture(page, ("TweetDetail",))
+                # Retry une fois si X est lent
+                for attempt in range(2):
+                    try:
+                        await page.goto(
+                            f"https://x.com/i/status/{tweet_id}",
+                            wait_until="domcontentloaded",
+                            timeout=self.timeout_seconds * 1000,
+                        )
+                        break  # Chargement reussi
+                    except Exception as exc:
+                        if attempt == 0:
+                            logger.warning(
+                                "Lecture du fil {} tentative {} echouee, retry: {}",
+                                tweet_id, attempt + 1, exc,
+                            )
+                            await page.close()
+                            page = await context.new_page()
+                            page.set_default_timeout(self.timeout_seconds * 1000)
+                            captured = self._attach_capture(page, ("TweetDetail",))
+                        else:
+                            self.last_errors[tweet_id] = str(exc)[:300]
+                            logger.warning("Lecture du fil {} impossible: {}", tweet_id, exc)
+                            raise
                 try:
-                    await page.goto(
-                        f"https://x.com/i/status/{tweet_id}",
-                        wait_until="domcontentloaded",
-                        timeout=self.timeout_seconds * 1000,
-                    )
                     await self._wait_capture(page, captured, seconds=8)
                     if click_more:
-                        for label in ("Afficher plus de réponses", "Show more replies"):
+                        for label in ("Afficher plus de reponses", "Show more replies"):
                             try:
                                 more = page.get_by_text(re.compile(label, re.IGNORECASE))
                                 if await more.count():
@@ -439,6 +479,7 @@ class XReader:
                     logger.warning("Lecture du fil {} impossible: {}", tweet_id, exc)
                 finally:
                     await page.close()
+
         except Exception as exc:
             self.last_errors["__all__"] = str(exc)[:500]
             logger.error("Session lecteur Playwright impossible: {}", exc)
