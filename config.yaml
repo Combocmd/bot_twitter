@@ -35,6 +35,10 @@ sources:
     - "barcacentre"
     - "FCBarcelona"
     - "FabrizioRomano"
+    - "_BarcaInfo"
+    - "MesBlaugrana"
+    - "BarcaNewsFRA"
+    - "Barca_Archive"
   rss_feeds:
     BarcaUniversal: "https://barcauniversal.com/feed/"
 
