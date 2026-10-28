@@ -200,3 +200,19 @@ media:
   cache_dir: "data/media_cache"
   max_images_per_tweet: 4
   max_media_per_tweet: 4
+
+vision:
+  enabled: true
+  model_priority:
+    - "moondream:2b"      # Fastest (~2-5s per image) - if available
+    - "llava:3b"          # Fast (~5-10s per image) - if available
+    - "llava:7b"          # Balanced (~15-30s per image) - currently available
+    - "bakllava:7b"
+  max_frames_per_video: 1  # Single frame for speed
+  timeout_seconds: 60
+  importance_boost_enabled: true
+  min_importance_for_vision: 0.2  # Only run vision if text importance >= this
+  # Speed optimizations
+  max_image_size: 336      # Resize images to max 336px (LLaVA native resolution)
+  num_predict: 200         # Max tokens for vision response (complete structured output)
+  temperature: 0.1         # Low temperature for consistent analysis

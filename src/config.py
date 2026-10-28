@@ -235,6 +235,49 @@ class MediaConfig(BaseModel):
         return v
 
 
+class VisionConfig(BaseModel):
+    enabled: bool = True
+    model_priority: List[str] = Field(default_factory=lambda: [
+        "llava:13b", "llava:7b", "bakllava:7b", "moondream:2b"
+    ])
+    max_frames_per_video: int = 3
+    timeout_seconds: int = 60
+    importance_boost_enabled: bool = True
+    min_importance_for_vision: float = 0.2
+    # Speed optimizations
+    max_image_size: int = 336      # Resize images to max 336px (LLaVA native resolution)
+    num_predict: int = 150         # Max tokens for vision response
+    temperature: float = 0.1       # Low temperature for consistent analysis
+
+    @field_validator("min_importance_for_vision")
+    @classmethod
+    def check_min_importance(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError("min_importance_for_vision must be between 0 and 1")
+        return v
+
+    @field_validator("max_image_size")
+    @classmethod
+    def check_max_image_size(cls, v: int) -> int:
+        if not 64 <= v <= 1024:
+            raise ValueError("max_image_size must be between 64 and 1024")
+        return v
+
+    @field_validator("num_predict")
+    @classmethod
+    def check_num_predict(cls, v: int) -> int:
+        if not 50 <= v <= 500:
+            raise ValueError("num_predict must be between 50 and 500")
+        return v
+
+    @field_validator("temperature")
+    @classmethod
+    def check_temperature(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("temperature must be between 0.0 and 1.0")
+        return v
+
+
 class Config(BaseModel):
     twitter: TwitterConfig = Field(default_factory=TwitterConfig)
     x_web: XWebConfig = Field(default_factory=XWebConfig)
@@ -252,6 +295,7 @@ class Config(BaseModel):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     match_calendar: MatchCalendarConfig = Field(default_factory=MatchCalendarConfig)
     media: MediaConfig = Field(default_factory=MediaConfig)
+    vision: VisionConfig = Field(default_factory=VisionConfig)
 
     @property
     def twitter_credentials(self) -> Dict[str, str]:

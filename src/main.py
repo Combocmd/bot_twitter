@@ -48,6 +48,7 @@ from .match_calendar import MatchCalendar
 from .monitor import SourceMonitor, SourceTweet
 from .rewriter import TweetRewriter
 from .scheduler import PostScheduler
+from .vision import VisionAnalyzer, get_vision_analyzer
 from .timeutil import now_utc, weighted_length
 from .web_client import XWebAuthError, XWebClient, XWebError
 from .x_reader import XReader
@@ -217,6 +218,14 @@ class BotOrchestrator:
         self.match_calendar = MatchCalendar(self.config)
         self.match_calendar.refresh_if_needed()
         self.scheduler = PostScheduler(self.db, self.web, self.config)
+        # Vision analyzer (lazy init)
+        self.vision = None
+        if self.config.vision.enabled and self.ollama_available:
+            try:
+                self.vision = get_vision_analyzer(self.config)
+                console.print("[cyan]Analyseur vision initialisé.[/cyan]")
+            except Exception as e:
+                logger.warning(f"Vision analyzer init failed: {e}")
         console.print("[green]Composants prêts.[/green]")
 
     # ------------------------------------------------------------------
@@ -294,6 +303,55 @@ class BotOrchestrator:
                         source_username=tweet.source_username,
                         language=tweet.language,
                     )
+                    
+                    # Vision analysis for tweets with media (run BEFORE rejection)
+                    vision_context = None
+                    if (self.vision and tweet.media_urls and 
+                        filter_result.importance_score >= self.config.vision.min_importance_for_vision):
+                        try:
+                            console.print(f"[dim]Analyse vision pour @{tweet.source_username} ({len(tweet.media_urls)} média(s))...[/dim]")
+                            vision_analysis = self.vision.get_combined_analysis(
+                                tweet.media_urls, tweet.media_types
+                            )
+                            if vision_analysis["has_media"]:
+                                vision_boost = vision_analysis["total_importance_boost"]
+                                vision_is_barca = vision_analysis["is_barca_media"]
+                                vision_confidence = 0.5
+                                # Get average confidence from individual vision results
+                                if vision_analysis.get("vision_results"):
+                                    confidences = [r.confidence for r in vision_analysis["vision_results"] if hasattr(r, 'confidence')]
+                                    if confidences:
+                                        vision_confidence = sum(confidences) / len(confidences)
+                                
+                                vision_context = {
+                                    "players_detected": vision_analysis["all_players"],
+                                    "scene_type": vision_analysis["dominant_scene"],
+                                    "text_extracted": vision_analysis["all_text"],
+                                    "key_facts": vision_analysis["all_key_facts"],
+                                    "is_barca_related": vision_is_barca,
+                                    "confidence": vision_confidence
+                                }
+                                # Apply vision boost to filter result with complementary logic
+                                filter_result = self.filter.apply_vision_boost(
+                                    filter_result,
+                                    vision_boost,
+                                    vision_context["players_detected"],
+                                    vision_context["scene_type"],
+                                    vision_is_barca=vision_is_barca,
+                                    vision_confidence=vision_confidence
+                                )
+                                logger.info(
+                                    "Vision @{}: boost={:.2f}, joueurs={}, scène={}, barça={}, conf={:.2f}, décision={}",
+                                    tweet.source_username, vision_boost,
+                                    vision_context["players_detected"][:3],
+                                    vision_context["scene_type"],
+                                    vision_is_barca,
+                                    vision_confidence,
+                                    filter_result.reason.split("décision: ")[-1] if "décision:" in filter_result.reason else "unknown"
+                                )
+                        except Exception as exc:
+                            logger.warning(f"Vision analysis failed for @{tweet.source_username}: {exc}")
+                    
                     if not filter_result.is_barca:
                         stats["barca_filtered"] += 1
                         self._consume_rejected_source(tweet)
@@ -310,6 +368,7 @@ class BotOrchestrator:
                                     tweet.source_username, tweet.tweet_id)
                         stats["barca_filtered"] += 1
                         continue
+                    
                     dedup_result = self.dedup.is_duplicate(
                         tweet.text, tweet.tweet_id, tweet.source_username
                     )
@@ -324,7 +383,8 @@ class BotOrchestrator:
                         )
                         continue
                     rewrite_result = self.rewriter.rewrite(
-                        tweet.text, tweet.source_username, filter_result.language
+                        tweet.text, tweet.source_username, filter_result.language,
+                        vision_context
                     )
                     if not rewrite_result.success:
                         stats["errors"] += 1

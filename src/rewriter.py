@@ -2,11 +2,20 @@
 
 import re
 import threading
+from dataclasses import dataclass
 from typing import Optional, Dict, List, Set
 import ollama
 from loguru import logger
 from .config import get_config
 from .timeutil import clean_tweet_text, weighted_length
+
+
+@dataclass
+class RewriteResult:
+    """Result of a rewrite operation."""
+    success: bool
+    rewritten_text: str = ""
+    error: str = ""
 
 
 class TweetRewriter:
@@ -274,7 +283,7 @@ class TweetRewriter:
             logger.warning(f"Arabic translation failed: {e}")
             return None
 
-    def _rewrite_to_english(self, text: str, source_lang: str) -> str:
+    def _rewrite_to_english(self, text: str, source_lang: str, vision_context: Optional[Dict] = None) -> str:
         """Rewrite in English with anti-plagiarism, fact-checking, and post-corrections."""
         if not text:
             return ""
@@ -284,13 +293,30 @@ class TweetRewriter:
         if not cleaned:
             return ""
 
+        # Build vision context string for prompt
+        vision_prompt = ""
+        if vision_context:
+            vision_parts = []
+            if vision_context.get("players_detected"):
+                vision_parts.append(f"Players visible: {', '.join(vision_context['players_detected'])}")
+            if vision_context.get("scene_type") and vision_context["scene_type"] != "unknown":
+                vision_parts.append(f"Scene: {vision_context['scene_type']}")
+            if vision_context.get("text_extracted"):
+                vision_parts.append(f"Text in image/video: {vision_context['text_extracted'][:200]}")
+            if vision_context.get("key_facts"):
+                vision_parts.append(f"Key facts: {'; '.join(vision_context['key_facts'])}")
+            if vision_parts:
+                vision_prompt = "\n\nVISION CONTEXT (from media analysis):\n" + "\n".join(vision_parts)
+
         # Protect critical terms before sending to LLM
         protected_source, protected_mapping = self._protect_terms(cleaned)
 
         prompt = (
             f"Source language: {source_lang}\n"
-            f"Original tweet: {protected_source}\n\n"
+            f"Original tweet: {protected_source}"
+            f"{vision_prompt}\n\n"
             "Rewrite this tweet in natural English, avoiding plagiarism. "
+            "Use the vision context to enhance accuracy and add relevant visual details. "
             "Follow the rules above. Respond ONLY with the rewritten tweet."
         )
 
@@ -318,7 +344,8 @@ class TweetRewriter:
         # Check plagiarism
         if self._detect_plagiarism(cleaned, attempt1) or fact_error:
             strict_prompt = (
-                f"Source: {protected_source}\n"
+                f"Source: {protected_source}"
+                f"{vision_prompt}\n\n"
                 "REWRITE THIS TWEET IN NATURAL ENGLISH WITHOUT COPYING ANY WORDS. "
                 "Change sentence structure, word order, and phrasing completely. "
                 "Respond ONLY with the rewritten tweet."
@@ -382,22 +409,44 @@ EMOJI GUIDELINES:
 - Use 🔵🔴 for Barcelona branding (blue/red)
 - Keep emojis minimal and professional"""
 
-    def rewrite(self, text: str, source_username: str = "source") -> str:
-        """Main rewrite method with language detection and optimization."""
+    def rewrite(self, text: str, source_username: str = "source", 
+                 language: str = "en", vision_context: Optional[Dict] = None) -> RewriteResult:
+        """Main rewrite method with language detection and optimization.
+        
+        Args:
+            text: Source tweet text
+            source_username: Source account username
+            language: Detected language (en, es, fr, ar, etc.)
+            vision_context: Optional dict with vision analysis results:
+                - players_detected: List[str]
+                - scene_type: str
+                - text_extracted: str
+                - key_facts: List[str]
+        """
         cleaned = clean_tweet_text(text)
         if not cleaned:
-            return ""
+            return RewriteResult(success=False, error="Empty text after cleaning")
 
-        # Detect language (fast heuristic)
-        if self._is_arabic(cleaned):
-            # Arabic → English translation
-            translated = self._translate_arabic_to_english(cleaned)
-            if translated:
-                return self._rewrite_to_english(translated, "ar")
-            return cleaned  # Fallback to original if translation fails
-
-        # English/Spanish/French → English reformulation
-        return self._rewrite_to_english(cleaned, "en")
+        try:
+            # Use provided language or detect (fast heuristic)
+            if language == "ar" or self._is_arabic(cleaned):
+                # Arabic → English translation
+                translated = self._translate_arabic_to_english(cleaned)
+                if translated:
+                    rewritten = self._rewrite_to_english(translated, "ar", vision_context)
+                else:
+                    rewritten = cleaned  # Fallback to original if translation fails
+            else:
+                # English/Spanish/French → English reformulation
+                rewritten = self._rewrite_to_english(cleaned, "en", vision_context)
+            
+            if not rewritten:
+                return RewriteResult(success=False, error="Rewrite produced empty result")
+            
+            return RewriteResult(success=True, rewritten_text=rewritten)
+        except Exception as e:
+            logger.error(f"Rewrite failed: {e}")
+            return RewriteResult(success=False, error=str(e))
 
     def check_model(self) -> bool:
         """Verify Ollama model is available."""
@@ -415,10 +464,10 @@ EMOJI GUIDELINES:
             logger.warning("Ollama check failed: {}", exc)
             return False
 
-    def test_rewrite(self, text: str, username: str = "test") -> Dict:
+    def test_rewrite(self, text: str, username: str = "test", language: str = "en", vision_context: Optional[Dict] = None) -> Dict:
         """Test rewrite with detailed diagnostics."""
         original = clean_tweet_text(text)
-        rewritten = self.rewrite(text, username)
+        rewritten = self.rewrite(text, username, language, vision_context)
         return {
             "original": original,
             "rewritten": rewritten,

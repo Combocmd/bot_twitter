@@ -188,3 +188,51 @@ class BarcaFilter:
             "language": result.language,
             "importance_score": round(result.importance_score, 2),
         }
+
+    def apply_vision_boost(self, filter_result: FilterResult, vision_boost: float, vision_players: List[str], vision_scene: str, vision_is_barca: bool = False, vision_confidence: float = 0.5) -> FilterResult:
+        """Apply vision analysis boost to filter result with complementary logic."""
+        new_importance = max(0.0, min(1.0, filter_result.importance_score + vision_boost))
+        
+        # COMPLEMENTARY LOGIC: Strong signal wins
+        text_strong_accept = filter_result.importance_score >= 0.65
+        text_strong_reject = filter_result.importance_score <= 0.25
+        vision_strong_accept = vision_is_barca and vision_confidence >= 0.7 and vision_boost >= 0.3
+        vision_strong_reject = not vision_is_barca and vision_confidence >= 0.7 and vision_boost <= -0.1
+        
+        # If text strongly accepts, keep it even if vision disagrees (unless vision very confidently rejects)
+        if text_strong_accept and not (vision_strong_reject and vision_confidence >= 0.85):
+            is_accepted = True
+            decision = "texte fort"
+        # If vision strongly accepts, rescue even if text was weak/rejected (high confidence vision wins)
+        elif vision_strong_accept:
+            is_accepted = True
+            decision = "vision fort"
+        # Normal threshold-based decision
+        else:
+            is_accepted = new_importance >= 0.4
+            decision = "seuil normal"
+        
+        # Build enhanced reason
+        vision_info = []
+        if vision_players:
+            vision_info.append(f"joueurs: {', '.join(vision_players[:3])}")
+        if vision_scene and vision_scene != "unknown":
+            vision_info.append(f"scène: {vision_scene}")
+        if vision_is_barca:
+            vision_info.append("barça:oui")
+        else:
+            vision_info.append("barça:non")
+        vision_info.append(f"conf:{vision_confidence:.2f}")
+        
+        new_reason = f"{filter_result.reason} | vision: {', '.join(vision_info)} | décision: {decision}"
+        
+        if not is_accepted:
+            new_reason += f" | score final: {new_importance:.2f}"
+        
+        return FilterResult(
+            is_accepted,
+            matched_keywords=filter_result.matched_keywords,
+            reason=new_reason,
+            language=filter_result.language,
+            importance_score=new_importance
+        )
