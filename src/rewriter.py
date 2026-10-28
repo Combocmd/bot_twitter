@@ -359,11 +359,62 @@ class TweetRewriter:
                     return attempt2
                 logger.warning("Second attempt also failed checks, using first attempt")
 
-        # Final length check and truncation
-        if weighted_length(attempt1) > self.max_chars:
-            attempt1 = attempt1[:self.max_chars].rsplit(' ', 1)[0] + "…"
+        # Final length check and truncation for both attempts
+        final_text = attempt1
+        
+        # If attempt2 was used and passed checks, use it
+        if 'attempt2' in locals() and attempt2:
+            final_text = attempt2
+        
+        # Ensure length compliance with retries
+        final_text = self._enforce_length_limit(final_text, protected_source, vision_prompt, protected_mapping)
+        
+        return final_text
 
-        return attempt1
+    def _enforce_length_limit(self, text: str, protected_source: str, vision_prompt: str, protected_mapping: Dict) -> str:
+        """Enforce 280-char limit with retries and smart truncation."""
+        from .timeutil import weighted_length
+        
+        max_chars = self.max_chars
+        
+        # If already within limit, return as-is
+        if weighted_length(text) <= max_chars:
+            return text
+        
+        # Try once more with explicit "CONCISE" instruction
+        logger.warning(f"Tweet too long ({weighted_length(text)} chars), retrying with concise instruction...")
+        
+        concise_prompt = (
+            f"Source: {protected_source}"
+            f"{vision_prompt}\n\n"
+            "REWRITE IN NATURAL ENGLISH. **MUST BE UNDER 280 CHARACTERS TOTAL.** "
+            "Be extremely concise. Use short sentences. No fluff. "
+            "Respond ONLY with the rewritten tweet."
+        )
+        
+        attempt3 = self._chat(self.ENGLISH_REWRITE_SYSTEM, concise_prompt)
+        if attempt3:
+            attempt3 = self._restore_terms(attempt3, protected_mapping)
+            attempt3 = self._apply_post_corrections(attempt3)
+            if weighted_length(attempt3) <= max_chars:
+                return attempt3
+        
+        # Final fallback: smart truncation at word boundary
+        if weighted_length(text) > max_chars:
+            # Try to truncate at last complete sentence
+            truncated = text[:max_chars]
+            last_period = truncated.rfind('.')
+            last_exclamation = truncated.rfind('!')
+            last_question = truncated.rfind('?')
+            last_break = max(last_period, last_exclamation, last_question)
+            
+            if last_break > max_chars * 0.7:  # If we have a good sentence break
+                return text[:last_break + 1]
+            
+            # Otherwise truncate at last space
+            return truncated.rsplit(' ', 1)[0] + "…"
+        
+        return text
 
     # System prompt for @UniverseCule
     ENGLISH_REWRITE_SYSTEM = """You are @UniverseCule, a professional football journalist specializing in FC Barcelona content.
