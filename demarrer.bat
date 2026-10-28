@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Bot @UniversCule
+title Bot @UniverseCule
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" (
@@ -15,7 +15,7 @@ if not exist ".venv\Scripts\python.exe" (
 set PYTHONIOENCODING=utf-8
 
 echo.
-echo   Demarrage du bot @UniversCule...
+echo   Demarrage du bot @UniverseCule...
 echo   Laissez cette fenetre ouverte. Ctrl+C ou arreter.bat pour stopper.
 echo.
 

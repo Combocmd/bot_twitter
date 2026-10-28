@@ -2,7 +2,7 @@
 Barcelona Twitter Bot - Main package.
 """
 __version__ = "1.1.19"
-__author__ = "UniversCule Bot"
+__author__ = "UniverseCule Bot"
 
 from .config import load_config, get_config, Config
 from .database import Database
@@ -12,7 +12,6 @@ from .filter import BarcaFilter
 from .dedup import ContentDeduplicator
 from .rewriter import TweetRewriter
 from .scheduler import PostScheduler
-from .reply_manager import ReplyManager
 
 __all__ = [
     "load_config",
@@ -31,5 +30,4 @@ __all__ = [
     "ContentDeduplicator",
     "TweetRewriter",
     "PostScheduler",
-    "ReplyManager",
 ]

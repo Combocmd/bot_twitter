@@ -1,4 +1,4 @@
-"""Main orchestration and CLI for the @UniversCule Barcelona bot.
+"""Main orchestration and CLI for the @UniverseCule Barcelona bot.
 
 Posting and media upload use the free logged-in web session. Reads use the
 separate Firefox session. The paid X API is never called by the normal loop.
@@ -10,7 +10,7 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Windows consoles still default to cp1252 on some installations.  The bot
 # handles French accents, arrows and emojis, so keep CLI diagnostics printable
@@ -29,18 +29,26 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from . import __version__
-from .config import Config, get_config, load_config
+try:
+    from . import __version__
+except ImportError:
+    __version__ = "unknown"
+import sys
+import os
+
+# Add the src directory to the Python path to handle relative imports
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from config import Config, get_config, load_config
 from .database import Database
 from .dedup import ContentDeduplicator
 from .filter import BarcaFilter
 from .media import MediaDownloader
 from .match_calendar import MatchCalendar
 from .monitor import SourceMonitor, SourceTweet
-from .reply_manager import ReplyManager
 from .rewriter import TweetRewriter
 from .scheduler import PostScheduler
-from .timeutil import iso_utc, weighted_length
+from .timeutil import now_utc, weighted_length
 from .web_client import XWebAuthError, XWebClient, XWebError
 from .x_reader import XReader
 from .x_session import READER_STATE, WRITER_STATE, ensure_reader_state, state_summary
@@ -63,7 +71,7 @@ class SafeConsole(Console):
 console = SafeConsole()
 app = typer.Typer(
     name="barca-bot",
-    help="Bot Twitter FC Barcelona pour @UniversCule (français, 100% gratuit)",
+    help="Bot Twitter FC Barcelona pour @UniverseCule (anglais, 100% gratuit)",
     add_completion=False,
 )
 _shutdown = False
@@ -209,15 +217,28 @@ class BotOrchestrator:
         self.match_calendar = MatchCalendar(self.config)
         self.match_calendar.refresh_if_needed()
         self.scheduler = PostScheduler(self.db, self.web, self.config)
-        self.reply_manager = ReplyManager(
-            self.db, self.web, self.rewriter, self.config,
-            reader=self.reader, filter_=self.filter,
-        )
         console.print("[green]Composants prêts.[/green]")
 
     # ------------------------------------------------------------------
     # Cycle
     # ------------------------------------------------------------------
+    def _consume_rejected_source(self, tweet) -> None:
+        """Advance an X checkpoint for a definitively rejected source post.
+
+        The monitor normally advances checkpoints while reading timelines, but
+        this defensive update prevents a filtered post from being returned on
+        every cycle when a reader response is slightly stale.
+        """
+        if getattr(tweet, "source_type", "twitter") != "twitter":
+            return
+        current = self.db.get_last_tweet_id(tweet.source_username)
+        try:
+            if current and int(current) >= int(tweet.tweet_id):
+                return
+        except (TypeError, ValueError):
+            pass
+        self.db.update_last_tweet_id(tweet.source_username, tweet.tweet_id)
+
     def run_cycle(self, dry_run: bool = False) -> Dict:
         stats = {
             "sources_polled": 0,
@@ -232,7 +253,7 @@ class BotOrchestrator:
             "dry_run": dry_run,
         }
         if not dry_run and self.scheduler.publishing_paused:
-            console.print("[red]Publication en pause: session @UniversCule invalide. Polling interrompu.[/red]")
+            console.print("[red]Publication en pause: session @UniverseCule invalide. Polling interrompu.[/red]")
             return stats
         if not dry_run and self.scheduler.available_original_slots() <= 0:
             console.print("[yellow]Budget d'originaux atteint pour aujourd'hui; polling reporté.[/yellow]")
@@ -253,14 +274,29 @@ class BotOrchestrator:
                     logger.info("Arrêt demandé: cycle interrompu avant le traitement suivant")
                     break
                 try:
+                    created_at = tweet.created_at_dt
+                    if created_at is None:
+                        logger.warning("Tweet source sans date valide, ignoré: {}", tweet.tweet_id)
+                        stats["errors"] += 1
+                        continue
+                    source_age = now_utc() - created_at
+                    if source_age > timedelta(minutes=2) or source_age < timedelta(minutes=-2):
+                        logger.info(
+                            "Tweet source hors fenêtre de fraîcheur ({} s), ignoré: {}",
+                            int(source_age.total_seconds()), tweet.tweet_id,
+                        )
+                        stats["barca_filtered"] += 1
+                        continue
+                    source_observed_at = now_utc()
+                    has_media = bool(tweet.media_urls)
                     filter_result = self.filter.is_barca_related(
                         tweet.text,
                         source_username=tweet.source_username,
-                        source_is_barca=True,
                         language=tweet.language,
                     )
                     if not filter_result.is_barca:
                         stats["barca_filtered"] += 1
+                        self._consume_rejected_source(tweet)
                         kw = ", ".join(filter_result.matched_keywords[:8]) or "(aucun)"
                         logger.info(
                             "Rejeté (pas Barça) @{} {} | raison: {} | mots: {} | langue: {}",
@@ -373,12 +409,24 @@ class BotOrchestrator:
                     if _shutdown:
                         logger.info("Arrêt demandé: publication non ajoutée à la file")
                         break
-                    queued = self.scheduler.enqueue_tweet(
-                        text=rewrite_result.rewritten_text,
-                        media_paths=media_paths,
-                        source_tweet_id=tweet.tweet_id,
-                        source_username=tweet.source_username,
-                    )
+                    try:
+                        queued = self.scheduler.enqueue_tweet(
+                            text=rewrite_result.rewritten_text,
+                            media_paths=media_paths,
+                            source_tweet_id=tweet.tweet_id,
+                            source_username=tweet.source_username,
+                            source_created_at=created_at,
+                            source_observed_at=source_observed_at,
+                        )
+                    except ValueError as exc:
+                        # A source can become too old while it is being
+                        # rewritten or while media are being downloaded. This
+                        # is an expected editorial rejection, not a crash.
+                        if "fenêtre" in str(exc) or "trop vieux" in str(exc):
+                            stats["barca_filtered"] += 1
+                            logger.info("Tweet source rejeté avant mise en file: {}", exc)
+                            continue
+                        raise
                     stats["enqueued"] += 1
                     self.dedup.store_processed(
                         tweet.text, tweet.tweet_id, tweet.source_username
@@ -412,35 +460,25 @@ class BotOrchestrator:
         _INSTANCE_LOCK = InstanceLock(_project_path("data/bot.lock"))
         _INSTANCE_LOCK.acquire()
         console.print(Panel.fit(
-            "[bold blue]Bot @UniversCule — démarrage[/bold blue]\n"
+            "[bold blue]Bot @UniverseCule — démarrage[/bold blue]\n"
             f"Sources : {len(self.config.sources.accounts)} comptes X\n"
             f"Calendrier : {'actif' if self.match_calendar.enabled else 'désactivé'}\n"
             f"Veille : toutes les {self.config.polling.interval_minutes} min\n"
             f"Publication : {self.config.scheduling.active_hours_label}, "
-            f"{self.config.scheduling.original_tweets_per_day} originaux + "
-            f"{self.config.replies.max_replies_per_day} réponses max/jour "
-            f"(plafond dur {self.config.scheduling.max_tweets_per_day})\n"
-            f"Réponses automatiques : {'activées' if self.config.replies.enabled else 'désactivées'}, "
-            "réponses manuelles",
+            f"{self.config.scheduling.original_tweets_per_day} originaux "
+            f"(plafond dur {self.config.scheduling.max_tweets_per_day})",
             border_style="blue",
         ))
         self.scheduler.start()
         console.print("[green]Bot démarré. Ctrl+C pour arrêter.[/green]\n")
         poll_interval = self.config.polling.interval_minutes * 60
         last_poll = 0.0
-        last_reply = 0.0
         try:
             while not _shutdown:
                 now = time.time()
                 if now - last_poll >= poll_interval:
                     self.run_cycle()
                     last_poll = now
-                if self.config.replies.enabled and now - last_reply >= 30:
-                    try:
-                        self.reply_manager.process_cycle()
-                    except Exception as exc:
-                        logger.exception("Cycle réponses: {}", exc)
-                    last_reply = now
                 time.sleep(10)
         except KeyboardInterrupt:
             pass
@@ -468,7 +506,6 @@ class BotOrchestrator:
             "today_stats": self.scheduler.get_today_stats(),
             "dedup_cache": self.dedup.get_cache_stats(),
             "sources": self.monitor.get_source_stats(),
-            "replies": self.reply_manager.get_status(),
             "ollama_available": self.ollama_available,
             "sessions": {
                 "reader": state_summary(READER_STATE),
@@ -518,7 +555,7 @@ def status(config: Optional[str] = typer.Option(None, "--config", "-c", help="Ch
     """Afficher le statut actuel du bot."""
     orchestrator = BotOrchestrator(config)
     data = orchestrator.get_status()
-    console.print(Panel("[bold]Statut du bot @UniversCule[/bold]", border_style="blue"))
+    console.print(Panel("[bold]Statut du bot @UniverseCule[/bold]", border_style="blue"))
 
     queue = Table(title="File de publication (7 jours)")
     queue.add_column("Statut", style="cyan")
@@ -534,11 +571,6 @@ def status(config: Optional[str] = typer.Option(None, "--config", "-c", help="Ch
         stats.add_row(key.replace("_", " ").title(), str(value))
     console.print(stats)
 
-    replies = data["replies"]
-    console.print(
-        f"[cyan]Réponses:[/cyan] {replies['sent_today']}/{replies['max_per_day']} aujourd'hui, "
-        f"{replies['pending']} en attente, délai {replies['delay_minutes']} min"
-    )
     dedup = data["dedup_cache"]
     console.print(
         f"[cyan]Déduplication:[/cyan] {dedup['cached_embeddings']} sources, "
@@ -679,7 +711,10 @@ def setup():
     def ollama_check():
         import ollama
         cfg = config or load_config()
-        client = ollama.Client(host=cfg.ollama.host)
+        client = ollama.Client(
+            host=cfg.ollama.host,
+            timeout=cfg.ollama.timeout_seconds,
+        )
         names = _ollama_models(client)
         if not any(cfg.ollama.model in name for name in names):
             raise RuntimeError(f"modèle {cfg.ollama.model} absent de {names}")
@@ -710,16 +745,16 @@ def setup():
         from .x_session import ensure_writer_state
         return ensure_writer_state()
 
-    check("Session @UniversCule", writer_state)
+    check("Session @UniverseCule", writer_state)
 
     def writer_auth():
         cfg = config or load_config()
         text = XWebClient(cfg).check_auth()
-        if "UniversCule" not in text:
+        if "UniverseCule" not in text:
             raise RuntimeError(text)
         return text.replace("\n", " | ")
 
-    check("Connexion web @UniversCule", writer_auth)
+    check("Connexion web @UniverseCule", writer_auth)
 
     def reader_auth():
         import asyncio
@@ -766,7 +801,7 @@ def setup():
 @app.command()
 def version():
     """Afficher la version."""
-    console.print(f"Bot @UniversCule v{__version__}")
+    console.print(f"Bot @UniverseCule v{__version__}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,63 @@
+{
+  "current_model": "qwen2.5:7b (test)",
+  "comparison_model": "qwen3:8b (test)",
+  "total": {
+    "count": 1,
+    "current_technical_success": 1,
+    "current_factual_success": 1,
+    "current_overall_success": 1,
+    "comparison_technical_success": 1,
+    "comparison_factual_success": 1,
+    "comparison_overall_success": 1,
+    "current_critical_errors": 0,
+    "comparison_critical_errors": 0,
+    "current_protected_errors": 0,
+    "comparison_protected_errors": 0,
+    "current_duration_total": 1.5,
+    "comparison_duration_total": 2.0,
+    "human_review_current": 0,
+    "human_review_comparison": 0
+  },
+  "categories": {
+    "test": {
+      "count": 1,
+      "current_technical_success": 1,
+      "current_factual_success": 1,
+      "current_overall_success": 1,
+      "comparison_technical_success": 1,
+      "comparison_factual_success": 1,
+      "comparison_overall_success": 1,
+      "current_critical_errors": 0,
+      "comparison_critical_errors": 0,
+      "current_protected_errors": 0,
+      "comparison_protected_errors": 0,
+      "current_duration_total": 1.5,
+      "comparison_duration_total": 2.0,
+      "human_review_current": 0,
+      "human_review_comparison": 0
+    }
+  },
+  "results": [
+    {
+      "id": "1",
+      "langue": "en",
+      "categorie": "test",
+      "source": "Test source",
+      "expected": "Test attendu",
+      "current_model": {
+        "rewritten": "Test réécrit",
+        "error": "",
+        "critical_facts_errors": [],
+        "protected_terms_errors": [],
+        "human_review_needed": false
+      },
+      "comparison_model": {
+        "rewritten": "Test comparé",
+        "error": "",
+        "critical_facts_errors": [],
+        "protected_terms_errors": [],
+        "human_review_needed": false
+      }
+    }
+  ]
+}

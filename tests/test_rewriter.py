@@ -1,158 +1,107 @@
-"""
-Tests unitaires pour le rewriter - verification des corrections v1.1.9
-"""
-import sys
-sys.path.insert(0, r"D:\projets\bot_twitter")
-
+import pytest
 from src.rewriter import TweetRewriter
-from unittest.mock import MagicMock, patch
+from src.config import get_config
+
+@pytest.fixture
+def rewriter():
+    return TweetRewriter(get_config())
+
+# Tests de base pour le rewriter
+
+def test_rewrite_english(rewriter):
+    result = rewriter.rewrite(
+        "Real Madrid are reportedly interested in signing Barcelona wonderkid, sources say.",
+        "test"
+    )
+    assert result.success
+    assert "Real Madrid" in result.rewritten_text
+    assert "Barça" in result.rewritten_text
+    assert result.language_detected == "en"
 
 
-def test_error_not_none_empty_response():
-    """Test que last_error n'est jamais None quand la reponse est vide"""
-    print("\n=== TEST 1: last_error ne doit jamais etre None (reponse vide) ===")
-    
-    rewriter = TweetRewriter()
-    
-    # Mock _chat pour retourner une chaine vide (simulation d'echech Ollama)
-    with patch.object(rewriter, '_chat', return_value=""):
-        result = rewriter.rewrite("Test tweet", "testuser", "en")
-        print(f"  Success: {result.success}")
-        print(f"  Error: {result.error}")
-        assert result.error is not None, f"ERROR: last_error est None! Error = '{result.error}'"
-        assert "vide" in result.error.lower(), f"ERROR: Message d'erreur inadapté: {result.error}"
-        print("  PASS: Error message present et non-None")
+def test_rewrite_spanish(rewriter):
+    result = rewriter.rewrite(
+        "El Barcelona busca un nuevo extremo para la próxima temporada.",
+        "test"
+    )
+    assert result.success
+    assert "Barça" in result.rewritten_text
+    assert "ailier" in result.rewritten_text
+    assert result.language_detected == "es"
 
 
-def test_error_not_none_invalid_candidate():
-    """Test que last_error n'est jamais None quand le candidat est invalide"""
-    print("\n=== TEST 2: last_error ne doit jamais etre None (candidat invalide) ===")
-    
-    rewriter = TweetRewriter()
-    
-    # Mock _chat pour retourner un texte invalide (trop court)
-    with patch.object(rewriter, '_chat', return_value="ok"):
-        result = rewriter.rewrite("Test tweet beaucoup plus long", "testuser", "en")
-        print(f"  Success: {result.success}")
-        print(f"  Error: {result.error}")
-        assert result.error is not None, f"ERROR: last_error est None! Error = '{result.error}'"
-        print("  PASS: Error message present et non-None")
+def test_rewrite_arabic(rewriter):
+    result = rewriter.rewrite(
+        "بارسا يبحث عن لاعب جديد من إسبانيا",
+        "test"
+    )
+    assert result.success
+    assert "Barça" in result.rewritten_text
+    assert "Espagne" in result.rewritten_text
+    assert result.language_detected == "ar"
 
 
-def test_anglicism_detection_french_context():
-    """Test que les anglicismes sont detectes dans un contexte français"""
-    print("\n=== TEST 3: Detection des anglicismes (contexte FR) ===")
-    
-    rewriter = TweetRewriter()
-    
-    # Tweet en français mais avec un anglicisme
-    test_tweet = "Le joueur a montre un grand sportsmanship lors du match"
-    
-    # Mock _chat pour simuler une reponse avec anglicisme
-    with patch.object(rewriter, '_chat', return_value=test_tweet):
-        result = rewriter.rewrite(test_tweet, "testuser", "fr")
-        print(f"  Original: {test_tweet[:50]}...")
-        print(f"  Success: {result.success}")
-        print(f"  Error: {result.error}")
-        
-        # L'auto-correction devrait detecter l'anglicisme
-        assert result.error is not None, "ERROR: Anglicisme non detecte!"
-        # Le message d'erreur doit mentionner sportsmanship ou etre coherent
-        print("  PASS: Anglicisme detecte")
+def test_rewrite_french(rewriter):
+    result = rewriter.rewrite(
+        "Le Barça recrute un nouveau milieu défensif pour la saison prochaine.",
+        "test"
+    )
+    assert result.success
+    assert "Barça" in result.rewritten_text
+    assert "milieu défensif" in result.rewritten_text
+    assert result.language_detected == "fr"
 
 
-def test_phrase_incoherente():
-    """Test detection de phrases incoherentes"""
-    print("\n=== TEST 4: Detection de phrases incoherentes ===")
-    
-    rewriter = TweetRewriter()
-    
-    # Phrase incoherente
-    test_tweet = "Le Barcelona ont perdu le match avec beaucoup de sportsmanship"
-    
-    with patch.object(rewriter, '_chat', return_value=test_tweet):
-        result = rewriter.rewrite(test_tweet, "testuser", "fr")
-        print(f"  Original: {test_tweet[:60]}...")
-        print(f"  Success: {result.success}")
-        print(f"  Error: {result.error}")
-        
-        # Verifier que l'erreur est captures
-        assert result.error is not None, "ERROR: Probleme non detecte!"
-        print("  PASS: Phrase incoherente detectee")
+def test_rewrite_fails_on_empty(rewriter):
+    result = rewriter.rewrite("", "test")
+    assert not result.success
+    assert result.error == "texte source vide"
 
 
-def test_version():
-    """Test version du bot"""
-    print("\n=== TEST 5: Version ===")
-    
-    from src import __version__
-    print(f"  Version actuelle: {__version__}")
-    assert __version__ == "1.1.9", f"ERROR: Version attendue 1.1.9, obtenu {__version__}"
-    print("  PASS: Version correcte")
+def test_rewrite_protects_terms(rewriter):
+    result = rewriter.rewrite(
+        "Kopa Trophy awarded to Barcelona's best player",
+        "test"
+    )
+    assert result.success
+    assert "Kopa Trophy" in result.rewritten_text
+    assert "Barça" in result.rewritten_text
+    assert "meilleur joueur" in result.rewritten_text
 
 
-def test_rollback_behavior():
-    """Test que le bot rollback correctement en cas d'echech repetes"""
-    print("\n=== TEST 6: Comportement rollback ===")
-    
-    rewriter = TweetRewriter()
-    
-    # Simuler 3 echecs consecutifs
-    call_count = [0]
-    def mock_chat_fail(*args, **kwargs):
-        call_count[0] += 1
-        if call_count[0] >= 3:
-            return ""  # Echec apres 3 tentatives
-        return "response"
-    
-    with patch.object(rewriter, '_chat', side_effect=mock_chat_fail):
-        result = rewriter.rewrite("Test tweet", "testuser", "en")
-        print(f"  Success: {result.success}")
-        print(f"  Error: {result.error}")
-        print(f"  Calls: {call_count[0]}")
-        
-        # Doit avoir essaie 3 fois et retourné une erreur
-        assert result.error is not None, "ERROR: Pas d'erreur apres echecs multiples!"
-        assert call_count[0] == 3, f"ERROR: Expected 3 calls, got {call_count[0]}"
-        print("  PASS: Rollback correct apres 3 echecs")
+def test_rewrite_rejects_english_leaks(rewriter):
+    result = rewriter.rewrite(
+        "Barcelona's new striker is a young English player",
+        "test"
+    )
+    assert not result.success
+    assert "anglicisme" in result.error.lower()
 
 
-def run_all_tests():
-    """Executer tous les tests"""
-    print("\n" + "="*60)
-    print("TESTS UNITAIRES - Bot Twitter v1.1.9")
-    print("="*60)
-    
-    tests = [
-        test_error_not_none_empty_response,
-        test_error_not_none_invalid_candidate,
-        test_anglicism_detection_french_context,
-        test_phrase_incoherente,
-        test_version,
-        test_rollback_behavior,
-    ]
-    
-    passed = 0
-    failed = 0
-    
-    for test in tests:
-        try:
-            test()
-            passed += 1
-        except AssertionError as e:
-            print(f"  FAIL: {e}")
-            failed += 1
-        except Exception as e:
-            print(f"  ERROR: {e}")
-            failed += 1
-    
-    print("\n" + "="*60)
-    print(f"RESULTATS: {passed} reussis, {failed} echoues")
-    print("="*60)
-    
-    return failed == 0
+def test_rewrite_rejects_arabic_leaks(rewriter):
+    result = rewriter.rewrite(
+        "بارسا تواجه تحديات كبيرة في الدوري الإسباني",
+        "test"
+    )
+    assert result.success
+    assert "défis" in result.rewritten_text.lower()
+    assert "liga" in result.rewritten_text.lower()
 
 
-if __name__ == "__main__":
-    success = run_all_tests()
-    sys.exit(0 if success else 1)
+def test_rewrite_rejects_nonsense_french(rewriter):
+    result = rewriter.rewrite(
+        "Le Barça a un hélicoptère dans son vestiaire",
+        "test"
+    )
+    assert not result.success
+    assert "mot inventé" in result.error.lower()
+
+
+def test_rewrite_rejects_elision_errors(rewriter):
+    result = rewriter.rewrite(
+        "L' égalisation a été marqué par un jeune joueur",
+        "test"
+    )
+    assert result.success
+    assert "l'égalisation" in result.rewritten_text
+    assert "l' égalisation" not in result.rewritten_text

@@ -346,6 +346,7 @@ class XReader:
                 captured = self._attach_capture(
                     page, ("UserOriginalsTimeline", "UserTweets", "UserTweetsAndReplies")
                 )
+                page_failed = False
                 # Retry une fois si X est lent (timeout ou erreur passagere)
                 for attempt in range(2):
                     try:
@@ -371,7 +372,13 @@ class XReader:
                         else:
                             self.last_errors[username] = str(exc)[:300]
                             logger.warning("Lecture de @{} impossible: {}", username, exc)
-                            raise
+                            page_failed = True
+                            break
+                if page_failed:
+                    await page.close()
+                    # Continue with the other sources. SourceMonitor can use
+                    # its RSS fallback for this account when available.
+                    continue
                 try:
                     await self._wait_capture(page, captured)
                     tweets: List[ReadTweet] = []

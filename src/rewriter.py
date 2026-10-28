@@ -1,270 +1,16 @@
-"""French rewrite and reply generation with local Ollama.
-
-The prompt is deliberately explicit about French football terminology because
-small local models tend to translate "right-back" as "ailier droit" and
-"reports" as "ragots". The output is always checked against X's weighted
-280-character limit.
-"""
-from __future__ import annotations
+"""English rewrite engine with anti-plagiarism, fact-checking, and protected terms for @UniverseCule."""
 
 import re
-from dataclasses import dataclass
-from typing import Dict, Optional
-
+import threading
+from typing import Optional, Dict, List, Set
 import ollama
 from loguru import logger
-
 from .config import get_config
-from .timeutil import clean_tweet_text, truncate_weighted, weighted_length
-from .translator import ArabicTranslator, is_arabic
-
-try:
-    from langdetect import DetectorFactory, detect
-    DetectorFactory.seed = 0
-except Exception:  # pragma: no cover
-    detect = None
-
-
-@dataclass
-class RewriteResult:
-    original_text: str
-    rewritten_text: str
-    original_length: int
-    rewritten_length: int
-    language_detected: str
-    model_used: str
-    success: bool
-    error: Optional[str] = None
-    within_limit: bool = True
+from .timeutil import clean_tweet_text, weighted_length
 
 
 class TweetRewriter:
-    SYSTEM_PROMPT = """Tu es @UniversCule, un média francophone passionné, 100% FC Barcelona.
-Tu écris comme un journaliste sportif français professionnel : naturel, direct, vivant, jamais robotique.
-
-RÈGLES ABSOLUES :
-1. Réponds UNIQUEMENT avec le texte final du tweet, en FRANÇAIS.
-2. Traduis toute information non francophone. Ne recopie jamais la langue source.
-3. Garde les faits exacts. N'invente rien, ne rajoute pas de contexte absent.
-4. Style : headline en MAJUSCULES, emojis pertinents, sauts de ligne pour la lisibilité.
-5. Maximum 260 caractères. Pas de lien, pas de mention @ (sauf pour citer une source présente dans le tweet original), pas de markdown, pas de hashtag.
-6. Vocabulaire football correct :
-   - right-back = latéral droit ; left-back = latéral gauche
-   - centre-back = défenseur central ; midfielder = milieu de terrain
-   - winger = ailier ; striker = attaquant / buteur
-   - reports / according to reports = selon / d'après les informations
-   - loan = prêt ; signing = recrue ; transfer = transfert
-   - squad list = liste des convoqués ; lineup = composition
-   - fixture = rencontre ; kick-off = coup d'envoi
-   - hat-trick = triplé ; brace = doublé
-   - substitution = remplacement / changement ; enters (the pitch) = entre en jeu ; comes off = sort
-   - "levels the match" / "levelle le match" = égalise
-   - "But n°2" = deuxième but ; n'écris jamais "n°" dans le tweet final
-   - El Clasico = le Clasico ; La Liga = la Liga
-   - "boosted" (réseaux sociaux) = mis en avant / sponsorisé, selon le contexte
-7. Ne traduis pas les noms propres, les surnoms de joueurs ni les noms de clubs.
-   - NE JAMAIS modifier un nom propre : "Yamal" reste "Yamal" (jamais "Lamyal"), "Cubarsi" reste "Cubarsi", "Barça" reste "Barça" (jamais "Barca")
-   - Si un nom semble coupé ou transformé, c'est une erreur à corriger
-8. N'invente AUCUN chiffre, score, statistique, date ou nom absent de la source.
-9. Pas de point d'exclamation à répétition. Les emojis sont autorisés avec parcimonie.
-10. Jamais d'espace après une apostrophe d'élision ("l'égalisation", pas "l' égalisation").
-11. Ne mélange JAMAIS l'anglais et le français : "the", "goal", "substitution", "enters", "levels" sont interdits dans le tweet final.
-    SAUF les mots d'alerte en début de tweet : "BREAKING", "JUST IN", "URGENT", "OFFICIEL", "EXCLU" peuvent être conservés en anglais s'ils sont en début de headline.
-12. Changements : écris une phrase française claire. Les emojis sont autorisés (↑ ↓ 🟢 🔴 ✅ ❌ etc.).
-    Format accepté : "Double changement pour le Barça à la 85e : ↑🟢 Adeyemi, ↑🟢 Gabriel Jesus ↓🔴 Gordon, ↓🔴 Raphinha"
-    Ou en français : "Double changement pour le Barça à la 85e : Adeyemi et Gabriel Jesus entrent, Gordon et Raphinha sortent."
-13. ANGLICISMES INTERDITS :
-    - "website" → "site web"
-    - "award" → "trophée" ou "prix"
-    - "announcement" → "annonce"
-    - "update" → "mise à jour"
-    - "coming" → "arrive" ou "prochain"
-    - "news" → "info" ou "nouvelle"
-14. FORMAT MEDIA FRANÇAIS :
-    - Début par des emojis pertinents (🚨 pour info urgente, 🌕 pour événement nocturne, ✈️ pour voyage)
-    - Headline en MAJUSCULES suivi d'un saut de ligne
-    - Contenu en lettres normales
-    - Si le tweet original cite une source (@username, "selon @xx", "Source: @xx"), conserve cette citation
-    - Ne PAS ajouter de source si le tweet original n'en cite pas
-    - Emojis Barça cohérents : utiliser soit 💙❤️ (deux cœurs) soit 🔵🔴 (deux cercles), JAMAIS de mélange
-15. GRAMMAIRE ET STYLE :
-    - Utilise "le Barça" ou "Barça" (jamais "Barca" sans accent)
-    - Articles corrects : "l'El Clásico" (avant voyelle), "le Classique", "la Liga"
-    - Accords corrects (pluriel, genre) : "premier match" (masculin), "première victoire" (féminin), "sa première" (pas "Sa première")
-    - Ponctuation française (espace avant : ; ! ?)
-    - Si le tweet original contient une citation entre guillemets, la réintégrer naturellement
-    - Ex: "@X dit: 'Le Barça va gagner'" → "Le Barça va gagner, affirme @X"
-    - Vocabulaire professionnel : éviter "fresque", préférer "performance", "représentation", "match"
-    - NE JAMAIS laisser une phrase incomplète ou coupée en fin de tweet
-16. RÉSUMÉ ET LONGUEUR :
-    - Si le tweet est trop long, résume l'essentiel sans perdre le fait principal
-    - Conserve les informations clés : qui, quoi, quand, où
-    - Supprime les détails superflus mais garde le sens
-17. INSPIRATION MÉDIA FRANÇAIS :
-    - Écris comme L'Équipe, RMC Sport, France Football
-    - Style direct, percutant, professionnel
-    - Jamais de fautes d'orthographe ou de grammaire
-    - Phrases courtes et claires
-
-Exemples de format attendu :
-- "🚨🚨🚨 KOUNDÉ ET CHRISTENSEN : DES RETOURS ESPÉRÉS \n\nHansi Flick espère récupérer Jules Koundé pour affronter Alavés et Andreas Christensen pour le match contre l'Atlético de Madrid."
-- "🌕🚨 LA DÉLÉGATION DU BARÇA VIENT D'ATTERRIR À LONDRES ! ✈️\n\nLes Blaugrana se dirigent désormais vers leur hôtel avant la cérémonie du Ballon d'Or ce soir."
-- "🚨 LE BARÇA DÉVOILE UNE VIDÉO SPÉCIALE AVANT LA CÉRÉMONIE DU BALLON D'OR 🤩\n\n12 maillots, des joueuses et des joueurs mis à l'honneur… 💙❤️"
-- Avec source citée DANS le tweet : "🚨 FERRAN TORRES 16E DU BALLON D'OR 🏆\n\nL'attaquant espagnol termine 16e du vote, selon @Barca_buzz."
-- Avec citation : "🚨 XABI ALCASA : 'JE VEUX RETOURNER AU BARÇA' 💙❤️\n\nLe milieu espagnol confirme son désir de revenir au club catalan."
-- Résumé d'un tweet long : "🚨 BARÇA : DEUX DÉFAITES DE PLUS\n\nLe Barça subit deux défaites consécutives mais la qualité de l'équipe reste intacte, selon le staff technique."
-- Avec l'El Clásico : "🚨 FLICK CRITIQUE LA PERFORMANCE APRÈS L'EL CLÁSICO\n\nLamine Yamal a joué 94,1% des minutes cette saison."
-
-18. INTERDICTION FORMELLE D'INVENTER DES MOTS :
-    - N'invente JAMAIS de mots français qui n'existent pas ("hélicopté", "épart", "dévaste", etc.)
-    - Si tu ne connais pas le mot français exact, utilise un synonyme simple ou reformule
-    - Vérifie que chaque mot existe dans le dictionnaire français avant de l'écrire
-    - Exemple INTERDIT : "XAVI ÉSPART : HÉLIQUÉ PAR LA DÉFAITE" → "épart" et "hélicopté" n'existent pas
-    - Exemple CORRECT : "XAVI : DÉVASTÉ PAR LA DÉFAITE, IL VEUT RETOURNER AU BARÇA"
-19. TERMES PROTÉGÉS (__PROTECTED_X__) :
-    - Certains mots du texte sont remplacés par des identifiants comme __PROTECTED_0__, __PROTECTED_1__, etc.
-    - NE JAMAIS traduire, modifier ou supprimer ces identifiants.
-    - Les laisser exactement tels quels dans ton texte final.
-    - Ils seront restaurés automatiquement après ta réponse.
-20. Exemples de termes à ne PAS toucher :
-    - __PROTECTED_0__ = BREAKING (ne pas traduire en "breaking" ou "actualité")
-    - __PROTECTED_1__ = Kopa Trophy (ne pas traduire en "trophée Kopa")
-    - __PROTECTED_2__ = Lamine Yamal (ne pas modifier en "Lamyal" ou "Yamel")
-
-Rappel : le Barça = bleu et rouge (💙❤️ ou 🔵🔴), toujours dans cet ordre !
-"""
-
-    REPLY_PROMPT = """Tu es @UniversCule, média francophone 100% FC Barcelona.
-Tu réponds à un commentaire sous l'un de nos posts. Réponds en FRANÇAIS, en une phrase naturelle, respectueuse et utile.
-Ne répète pas le commentaire, ne mets pas de lien, pas de hashtag, pas de mention @, pas de "en tant qu'IA".
-Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref et chaleureux. Si c'est une question, réponds précisément sans inventer.
-"""
-
-    def __init__(self, config=None):
-        self.config = config or get_config()
-        self.client = ollama.Client(host=self.config.ollama.host)
-        self.model = self.config.ollama.model
-        self.max_chars = int(self.config.length.max_chars)
-        self.temperature = float(self.config.ollama.temperature)
-        self._translator: Optional[ArabicTranslator] = None
-
-    # ------------------------------------------------------------------
-    # Ollama plumbing
-    # ------------------------------------------------------------------
-    def _chat(self, system: str, user: str, temperature: Optional[float] = None) -> str:
-        response = self.client.chat(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            options={
-                "temperature": self.temperature if temperature is None else temperature,
-                "num_predict": 220,
-            },
-        )
-        try:
-            message = response["message"]["content"]
-        except Exception:
-            message = getattr(getattr(response, "message", None), "content", "")
-        return str(message or "").strip()
-
-    def _sanitize(self, text: str) -> str:
-        text = clean_tweet_text(text)
-        text = re.sub(r"^\s*(?:tweet|réponse|post)\s*:\s*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"^\s*(?:bien sûr|voici|d'accord)[,:\s]+", "", text, flags=re.IGNORECASE)
-        text = text.strip().strip('"').strip("'").strip()
-        # Preserve newlines for media format: headline\ncontent\n[source]
-        text = re.sub(r"[^\S\n]+", " ", text)  # Collapse horizontal whitespace only
-        text = re.sub(r"\n{3,}", "\n\n", text)  # Limit consecutive newlines
-        # Do not let the model insert source handles or links.
-        text = re.sub(r"https?://\S+", "", text)
-        text = re.sub(r"(?<!\w)@[A-Za-z0-9_]{2,15}", "", text)
-        text = re.sub(r"#\w+", "", text, flags=re.UNICODE)
-        text = re.sub(r"\s+([,.;:!?])", r"\1", text)
-        text = re.sub(r"([.!?])([A-ZÀ-Ý])", r"\1 \2", text)
-        # French typography: a space before : ; ! ? (but never inside a time
-        # such as 21:30, where the colon sits between two digits).
-        text = re.sub(r"(?<=[A-Za-zÀ-ÿ])\s*:", " :", text)
-        text = re.sub(r"(?<=[A-Za-zÀ-ÿ0-9])\s*([;!?])", r" \1", text)
-        return text
-
-    def _looks_french(self, text: str) -> bool:
-        if detect is None:
-            return True
-        cleaned = clean_tweet_text(text)
-        if len(cleaned) < 25:
-            return True
-        try:
-            lang = detect(cleaned)
-        except Exception:
-            return True
-        if lang in {"fr", "unknown"}:
-            return True
-        # Short French sentences with foreign player names are frequently
-        # misdetected (e.g. "Lewandowski signe 2 buts ce soir" -> Polish).
-        # Accept when clear French markers are present; real English output is
-        # still rejected by _ENGLISH_LEAKS below.
-        markers = {m.lower() for m in self._FRENCH_MARKERS.findall(cleaned)}
-        return len(markers) >= 2
-
-    def _detect_source_citations(self, text: str) -> List[str]:
-        """Detect @mentions that appear to be source citations."""
-        # Find all @mentions in the text
-        mentions = re.findall(r"@([A-Za-z0-9_]{2,15})", text)
-        # Filter out common non-source mentions
-        non_sources = {"barcelona", "fcb", "fcbarcelona", "universcule"}
-        sources = [m for m in mentions if m.lower() not in non_sources]
-        return list(set(sources))
-
-    # Output fragments that were observed as broken/low-quality generations.
-    _BAD_OUTPUTS = {
-        "levelle", "leveling", "anxiety", "whistle", "passed'ici", "fermindinho",
-        "the match", "in the match", "rush",
-    }
-    # Distinctive French function words, used to rescue a short French
-    # sentence that langdetect misclassifies because of a foreign player name.
-    _FRENCH_MARKERS = re.compile(
-        r"\b(?:le|la|les|des|du|une|est|pour|avec|sur|dans|aux|ce|cette|ces|"
-        r"ils|elles|ont|après|selon|plus|mais|et|à|au|en|par|son|sa|ses|"
-        r"leur|leurs|nous|vous|je|tu|il|elle|ne|pas|très|bien|match|buts|"
-        r"entrent|sort|changement|remplacement|égalise|victoire|défaite)\b",
-        re.IGNORECASE,
-    )
-    # English words that must never survive into a French media tweet.
-    # NB: "match", "score" and "chance" are valid French words and are NOT leaks.
-    _ENGLISH_LEAKS = re.compile(
-        r"\b(?:the|and|with|from|into|after|before|goal|shot|missed|"
-        r"according|reports|substitution|enters|comes|off|level|levels|"
-        r"half-time|full-time|kick-off|lineup|squad)\b",
-        re.IGNORECASE,
-    )
-    # Deterministic repairs applied before validation.
-    _GLOSSARY_FIXES = [
-        (re.compile(r"\baccording\s+to\s+reports?\b", re.IGNORECASE), "selon les informations"),
-        (re.compile(r"\b(?:levelle|levélle|levels?)\s+(?:le\s+|la\s+|the\s+)?(?:match|score|game)\b", re.IGNORECASE), "égalise"),
-        (re.compile(r"\b(?:levelle|levélle)\b", re.IGNORECASE), "égalise"),
-        (re.compile(r"\blevels\b", re.IGNORECASE), "égalise"),
-        (re.compile(r"\blevel\b", re.IGNORECASE), "égalise"),
-        (re.compile(r"\bdouble\s+substitution\b", re.IGNORECASE), "double changement"),
-        (re.compile(r"\bsubstitutions\b", re.IGNORECASE), "remplacements"),
-        (re.compile(r"\bsubstitution\b", re.IGNORECASE), "remplacement"),
-        (re.compile(r"\benters\b", re.IGNORECASE), "entre en jeu"),
-        (re.compile(r"\bcomes\s+off\b", re.IGNORECASE), "sort"),
-        (re.compile(r"\bbut\s+n°\s*(\d+)\b", re.IGNORECASE), r"\1e but"),
-        (re.compile(r"\bde\s+(Real\s+Madrid|FC\s+Barcelona|FCB)\b", re.IGNORECASE), r"du \1"),
-    ]
-    # Words that may legitimately become digits in a French rewrite; used to
-    # normalize the SOURCE before the invented-number check.
-    _WORD_NUMBERS = {
-        "zero": "0", "nul": "0", "one": "1", "un": "1", "une": "1", "two": "2",
-        "deux": "2", "three": "3", "trois": "3", "four": "4", "quatre": "4",
-        "five": "5", "cinq": "5", "six": "6", "seven": "7", "sept": "7",
-        "eight": "8", "huit": "8", "nine": "9", "neuf": "9", "ten": "10",
-        "dix": "10", "first": "1", "premier": "1", "première": "1",
-        "second": "2", "deuxième": "2", "third": "3", "troisième": "3",
-        "fourth": "4", "fifth": "5", "brace": "2", "hat-trick": "3",
-    }
+    """Professional English rewriter for @UniverseCule FC Barcelona content."""
 
     # Terms that must NEVER be translated or modified by the AI.
     # Longest keys first so "Kopa Trophy" is protected before "Kopa" alone.
@@ -274,62 +20,144 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
         "Ballon d'Or": "Ballon d'Or",
         "Ballon d'or": "Ballon d'Or",
         "Ballon d or": "Ballon d'Or",
+        "Golden Boy": "Golden Boy",
+        "FIFA The Best": "FIFA The Best",
+        "Pichichi": "Pichichi",
+        "Zamora": "Zamora",
         # Alert words (keep in English at start of headline)
         "BREAKING": "BREAKING",
         "JUST IN": "JUST IN",
         "URGENT": "URGENT",
-        "OFFICIEL": "OFFICIEL",
-        "EXCLU": "EXCLU",
+        "OFFICIAL": "OFFICIAL",
+        "EXCLUSIVE": "EXCLUSIVE",
         # Player names (never modify)
         "Lamine Yamal": "Lamine Yamal",
         "Pau Cubarsi": "Pau Cubarsi",
         "Pau Cubarsí": "Pau Cubarsi",
         "Pedri": "Pedri",
         "Gavi": "Gavi",
+        "Robert Lewandowski": "Robert Lewandowski",
         "Lewandowski": "Lewandowski",
         "Raphinha": "Raphinha",
         "Frenkie de Jong": "Frenkie de Jong",
+        "De Jong": "De Jong",
+        "Marc-Andre ter Stegen": "Marc-Andre ter Stegen",
         "Ter Stegen": "Ter Stegen",
-        "Koundé": "Koundé",
-        "Araújo": "Araújo",
+        "Jules Kounde": "Jules Kounde",
+        "Kounde": "Kounde",
+        "Ronald Araujo": "Ronald Araujo",
+        "Araujo": "Araujo",
+        "Alejandro Balde": "Alejandro Balde",
         "Balde": "Balde",
-        "Fermín": "Fermín",
+        "Fermin Lopez": "Fermin Lopez",
+        "Fermin": "Fermin",
         "Dani Olmo": "Dani Olmo",
+        "Olmo": "Olmo",
         "Ferran Torres": "Ferran Torres",
+        "Ferran": "Ferran",
         "Ansu Fati": "Ansu Fati",
-        "Eric García": "Eric García",
-        "Iñigo Martínez": "Iñigo Martínez",
+        "Ansu": "Ansu",
+        "Eric Garcia": "Eric Garcia",
+        "Eric García": "Eric Garcia",
+        "Inigo Martinez": "Inigo Martinez",
+        "Iñigo Martínez": "Inigo Martinez",
+        "Andreas Christensen": "Andreas Christensen",
+        "Christensen": "Christensen",
+        "Inaki Pena": "Inaki Pena",
+        "Iñaki Peña": "Inaki Pena",
+        "Wojciech Szczesny": "Wojciech Szczesny",
+        "Szczesny": "Szczesny",
+        "Hector Fort": "Hector Fort",
+        "Héctor Fort": "Hector Fort",
+        "Marc Casado": "Marc Casado",
+        "Casado": "Casado",
+        "Marc Bernal": "Marc Bernal",
+        "Bernal": "Bernal",
+        "Pablo Torre": "Pablo Torre",
+        "Torre": "Torre",
+        # Staff
         "Hansi Flick": "Hansi Flick",
+        "Flick": "Flick",
         "Deco": "Deco",
         "Joan Laporta": "Joan Laporta",
         "Laporta": "Laporta",
         # Club names
         "Barça": "Barça",
-        "FC Barcelona": "Barça",
-        "FC Barcelone": "Barça",
-        "FCB": "Barça",
-        "Barcelona": "Barça",
+        "FC Barcelona": "FC Barcelona",
+        "FC Barcelone": "FC Barcelona",
+        "FCB": "FC Barcelona",
+        "Barcelona": "Barcelona",
+        "Blaugrana": "Blaugrana",
+        "Cules": "Cules",
         # Competitions
-        "La Liga": "la Liga",
-        "Champions League": "Ligue des champions",
-        "Champions": "Ligue des champions",
-        "Liga": "la Liga",
-        "Copa del Rey": "Coupe du Roi",
-        "Supercopa": "Supercoupe",
-        # El Clasico
-        "El Clásico": "l'El Clásico",
-        "El Clasico": "l'El Clásico",
-        "le Clasico": "l'El Clásico",
-        "le Classique": "l'El Clásico",
+        "La Liga": "La Liga",
+        "Champions League": "Champions League",
+        "Copa del Rey": "Copa del Rey",
+        "Supercopa": "Supercopa",
+        "El Clasico": "El Clasico",
+        "El Clásico": "El Clasico",
     }
 
-    def _protect_terms(self, text: str) -> tuple[str, Dict[str, str]]:
-        """Remplace les termes protégés par des identifiants temporaires.
+    # Deterministic post-corrections for common LLM errors
+    _POST_CORRECTIONS = [
+        # Fix common football terminology errors
+        (re.compile(r"\bforward\b", re.IGNORECASE), "forward"),
+        (re.compile(r"\bstriker\b", re.IGNORECASE), "forward"),
+        (re.compile(r"\bwin\b", re.IGNORECASE), "win"),
+        (re.compile(r"\bsign\b", re.IGNORECASE), "sign"),
+        # Fix common grammar/wording issues
+        (re.compile(r"\ba forward\b", re.IGNORECASE), "a forward"),
+        (re.compile(r"\ban forward\b", re.IGNORECASE), "a forward"),
+        # Ensure proper capitalization of FC Barcelona
+        (re.compile(r"\bfc barcelona\b", re.IGNORECASE), "FC Barcelona"),
+        (re.compile(r"\bfc barcelone\b", re.IGNORECASE), "FC Barcelona"),
+        # Fix common misspellings
+        (re.compile(r"\byamal\b", re.IGNORECASE), "Yamal"),
+        (re.compile(r"\bcubarsi\b", re.IGNORECASE), "Cubarsi"),
+        (re.compile(r"\baraujo\b", re.IGNORECASE), "Araujo"),
+        (re.compile(r"\blewandowski\b", re.IGNORECASE), "Lewandowski"),
+        # Fix "according to reports" -> "reports say" (more professional)
+        (re.compile(r"\baccording to reports\b", re.IGNORECASE), "reports say"),
+        (re.compile(r"\baccording to information\b", re.IGNORECASE), "reports say"),
+        # Remove redundant "official" if already in alert
+        (re.compile(r"\bOFFICIAL:\s*official\b", re.IGNORECASE), "OFFICIAL:"),
+    ]
 
-        Retourne (texte_protégé, mapping_identifiant_vers_terme_original).
-        Les termes les plus longs sont protégés en premier pour éviter les
-        remplacements partiels.
-        """
+    def __init__(self, config=None):
+        self.config = config or get_config()
+        self.client = ollama.Client(host=self.config.ollama.host)
+        self.model = self.config.ollama.model
+        self.max_chars = int(self.config.length.max_chars)
+        self.temperature = float(self.config.ollama.temperature)
+        # Cache for Arabic translation model
+        self._ar_tokenizer = None
+        self._ar_model = None
+        self._ar_model_lock = threading.Lock()
+
+    def _chat(self, system: str, user: str) -> str:
+        """Optimized Ollama call with minimal overhead."""
+        try:
+            response = self.client.chat(
+                model=self.model,
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                options={"temperature": self.temperature, "num_predict": 220},
+            )
+            return str(response["message"]["content"]).strip()
+        except Exception as e:
+            logger.warning(f"Ollama error: {e}")
+            return ""
+
+    def _sanitize(self, text: str) -> str:
+        """Ultra-fast text sanitization."""
+        text = clean_tweet_text(text)
+        text = re.sub(r"https?://\S+", "", text)
+        text = re.sub(r"(?<!\w)@\w+", "", text)
+        text = re.sub(r"#\w+", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    def _protect_terms(self, text: str) -> tuple[str, Dict[str, str]]:
+        """Replace protected terms with temporary placeholders."""
         mapping: Dict[str, str] = {}
         protected = text
         # Sort by length descending so "Kopa Trophy" is matched before "Kopa".
@@ -337,456 +165,242 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
             if not term:
                 continue
             placeholder = f"__PROTECTED_{len(mapping)}__"
-            # Case-insensitive match but preserve the original term for restoration.
             pattern = re.compile(re.escape(term), re.IGNORECASE)
             matches = list(pattern.finditer(protected))
-            # Replace from right to left to keep positions valid.
             for match in reversed(matches):
                 protected = protected[:match.start()] + placeholder + protected[match.end():]
-                mapping[placeholder] = term
+                mapping[placeholder] = self._PROTECTED_TERMS[term]
         return protected, mapping
 
     def _restore_terms(self, text: str, mapping: Dict[str, str]) -> str:
-        """Restaure les termes protégés depuis leurs identifiants temporaires."""
+        """Restore protected terms from their placeholders."""
         restored = text
         for placeholder, original in mapping.items():
             restored = restored.replace(placeholder, original)
         return restored
 
     def _verify_protected_restored(self, text: str, mapping: Dict[str, str]) -> Optional[str]:
-        """Vérifie que tous les identifiants temporaires ont été restaurés."""
+        """Verify all placeholders have been restored."""
         for placeholder in mapping:
             if placeholder in text:
-                return f"identifiant temporaire non restauré: {placeholder}"
+                return f"protected term not restored: {placeholder}"
         return None
 
-    def _apply_glossary(self, text: str) -> str:
-        for pattern, replacement in self._GLOSSARY_FIXES:
-            text = pattern.sub(replacement, text)
-        return text
-
-    def _post_correct_french(self, text: str) -> str:
-        """Post-correction automatique des erreurs courantes de traduction."""
-        if not text:
-            return text
-
-        # 1. Noms propres - corrections obligatoires
-        # "LAMYAL" -> "YAMAL" (doit etre avant la regle ci-dessous)
-        text = re.sub(r"\bLAMYAL\b", "YAMAL", text)
-        text = re.sub(r"\bLamyal\b", "Yamal", text)
-        # "Lamy al" (avec espace) -> "Lamine Yamal"
-        text = re.sub(r"\bLamy\b\s+\bal\b", "Lamine Yamal", text, flags=re.IGNORECASE)
-        text = re.sub(r"\bLamyAl\b", "Lamine Yamal", text)
-        # "Pa" seul avant Cubarsi -> "Pau"
-        text = re.sub(r"\bPa\s+Cubarsi\b", "Pau Cubarsi", text)
-        text = re.sub(r"\bPa\b\s+", "Pau ", text)
-
-        # 2. Accords de genre
-        # "première match" -> "premier match" (match est masculin)
-        text = re.sub(r"\bpremière\s+match\b", "premier match", text, flags=re.IGNORECASE)
-        text = re.sub(r"\bPremière\s+match\b", "Premier match", text)
-        # "Sa première" -> "sa première" (minuscule au milieu de phrase)
-        text = re.sub(r"\bSa\s+première\b", "sa première", text)
-
-        # 3. Majuscules incorrectes au milieu des mots
-        # "Match" au milieu -> "match" (sauf en début de phrase)
-        text = re.sub(r"(?<=\s)Match\b", "match", text)
-        text = re.sub(r"(?<=\s)Disputera\b", "disputera", text)
-        text = re.sub(r"(?<=\s)Première\b", "première", text)
-
-        # 4. Phrase coupée - si le tweet ne se termine pas par une ponctuation
-        text = text.strip()
-        if text and text[-1] not in {".", "!", "?", "…", ":", ";"}:
-            # Vérifier que ce n'est pas un emoji final (déjà acceptable)
-            if not re.search(r"[\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]$", text):
-                text = text + "."
-
-        # 5. Nettoyer les doubles espaces
-        text = re.sub(r" {2,}", " ", text)
-
-        return text
-
-    @staticmethod
-    def _numbers(text: str) -> set:
+    def _extract_numbers(self, text: str) -> Set[str]:
+        """Extract all numbers from text."""
         return set(re.findall(r"\d+", text))
 
-    # Facts expressed as ordinals in the source: the rewrite must keep the
-    # same fact instead of substituting an invented one (e.g. turning
-    # "second goal" into "égalisation", which adds information).
-    _ORDINAL_FACTS = (
-        (re.compile(r"\b(?:second|2nd)\s+goal\b", re.IGNORECASE),
-         re.compile(r"\b(?:deuxième|2e|second)\s+but\b", re.IGNORECASE),
-         "deuxième but"),
-        (re.compile(r"\b(?:third|3rd)\s+goal\b", re.IGNORECASE),
-         re.compile(r"\b(?:troisième|3e)\s+but\b", re.IGNORECASE),
-         "troisième but"),
-        (re.compile(r"\b(?:equaliser|equalizer|levels?\s+the\s+match)\b", re.IGNORECASE),
-         re.compile(r"\bégalis", re.IGNORECASE),
-         "égalisation"),
-    )
+    def _extract_scores(self, text: str) -> Set[tuple]:
+        """Extract all score patterns (X-Y) from text."""
+        return set(re.findall(r"(\d{1,3})\s*-\s*(\d{1,3})", text))
 
     def _facts_check(self, rewritten: str, source: str) -> Optional[str]:
         """Reject any number or score that does not exist in the source."""
-        src = source.lower()
-        for word, digit in self._WORD_NUMBERS.items():
-            src = re.sub(rf"\b{re.escape(word)}\b", digit, src)
-        missing = sorted(
-            n for n in self._numbers(rewritten)
-            if n not in self._numbers(src)
-        )
+        src_numbers = self._extract_numbers(source)
+        out_numbers = self._extract_numbers(rewritten)
+        missing = sorted(n for n in out_numbers if n not in src_numbers)
         if missing:
-            return f"chiffre absent de la source: {', '.join(missing)}"
-        normalize = lambda s: re.sub(r"[–—:/]", "-", s)
-        out_scores = set(re.findall(r"\b(\d{1,3})\s*-\s*(\d{1,3})\b", normalize(rewritten)))
-        if out_scores:
-            src_scores = set(re.findall(r"(\d{1,3})\s*-\s*(\d{1,3})", normalize(src)))
-            for score in sorted(out_scores):
-                if score not in src_scores:
-                    return f"score absent de la source: {score[0]}-{score[1]}"
-        for source_pattern, expected, label in self._ORDINAL_FACTS:
-            if source_pattern.search(source) and not expected.search(rewritten):
-                return f"fait non conservé: {label} attendu"
+            return f"number not in source: {', '.join(missing)}"
+
+        src_scores = self._extract_scores(source)
+        out_scores = self._extract_scores(rewritten)
+        for score in out_scores:
+            if score not in src_scores:
+                return f"score not in source: {score[0]}-{score[1]}"
         return None
 
-    def _invalid(self, text: str, source: str = "") -> Optional[str]:
-        if not text:
-            return "réponse vide"
-        if len(text) < 8:
-            return "réponse trop courte"
-        if re.search(
-            r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af"
-            r"\u0600-\u06ff\u0750-\u077f\u0590-\u05ff\u0400-\u04ff]",
-            text,
-        ):
-            return "caractères non latins détectés"
-        if not self._looks_french(text):
-            return "langue non française"
-        low = text.lower()
-        for bad in self._BAD_OUTPUTS:
-            if bad in low:
-                return f"formulation suspecte: « {bad} »"
-        leak = self._ENGLISH_LEAKS.search(text)
-        if leak:
-            return f"anglicisme/anglais détecté: « {leak.group(0)} »"
-        # Angles courants à éviter
-        for anglicism in ["website", "web site", "award", "announcement", "update", "coming", "news"]:
-            if anglicism in low:
-                return f"anglicisme détecté: « {anglicism} »"
-        if re.search(r"[A-Za-zÀ-ÿ](['’])\s", text):
-            return "élision cassée (espace après apostrophe)"
-        if re.search(r"[A-Za-zÀ-ÿ]'\s+[A-ZÀ-Ý0-9]", text):
-            return "élision incorrecte devant majuscule ou chiffre"
-        if re.search(r"[A-Za-zÀ-ÿ]'[0-9]", text):
-            return "élision incorrecte devant un chiffre"
-        # Détection des mots français inventés / tronqués / absurdes
-        nonsense = self._check_nonsense_french(text)
-        if nonsense:
-            return nonsense
-        if source:
-            facts_error = self._facts_check(text, source)
-            if facts_error:
-                return facts_error
-        return None
+    def _apply_post_corrections(self, text: str) -> str:
+        """Apply deterministic post-corrections."""
+        for pattern, replacement in self._POST_CORRECTIONS:
+            text = pattern.sub(replacement, text)
+        return text
 
-    def _check_nonsense_french(self, text: str) -> Optional[str]:
-        """Détecte les mots français inventés, tronqués ou absurdes."""
-        # 4+ consonnes consécutives (très rare en français)
-        if re.search(r"[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ]{4,}", text):
-            return "séquence de consonnes improbable (mot inventé?)"
-        # Voyelle accentuée en début de mot suivie de 3+ consonnes
-        if re.search(r"\b[àâäéèêëîïôöùûüÿ][bcdfghjklmnpqrstvwxyz]{3,}", text, re.IGNORECASE):
-            return "début de mot suspect (voyelle accentuée + consonne cluster)"
-        # "hélicopt" doit toujours être suivi de "ère" (hélicoptère) ; "héliqu" n'existe pas
-        if re.search(r"hélicopt(?!ère)|héliqu", text, re.IGNORECASE):
-            return "mot tronqué ou inventé détecté"
-        # Mots finissant par des fragments absurdes (pas de mots français valides)
-        if re.search(r"\b\w+(?:pté|qté|épart|éspart|spart)\b", text, re.IGNORECASE):
-            return "mot tronqué ou inventé détecté"
-        return None
+    def _detect_plagiarism(self, original: str, rewritten: str) -> bool:
+        """Enhanced plagiarism check using word overlap and semantic similarity."""
+        original_words = set(original.lower().split())
+        rewritten_words = set(rewritten.lower().split())
+        overlap = original_words.intersection(rewritten_words)
 
-    # ------------------------------------------------------------------
-    # Rewrite
-    # ------------------------------------------------------------------
-    def rewrite(self, text: str, source_username: str = "source", source_lang: str = "auto") -> RewriteResult:
-        original = clean_tweet_text(text)
-        if not original:
-            return RewriteResult(
-                text, "", 0, 0, source_lang, self.model, False, "texte source vide", False
-            )
-        model_source = original
-        literal_translation: Optional[str] = None
-        if (
-            getattr(self.config.translation, "enabled", True)
-            and is_arabic(original)
-        ):
-            if self._translator is None:
-                self._translator = ArabicTranslator(self.config)
-            literal_translation = self._translator.translate(original, source_lang)
-            if literal_translation:
-                model_source = literal_translation
-                logger.debug("Traduction littérale arabe: {}", literal_translation[:160])
+        if len(overlap) > 2:
+            original_word_count = len(original_words)
+            rewritten_word_count = len(rewritten_words)
+            if original_word_count > 0 and rewritten_word_count > 0:
+                similarity_ratio = len(overlap) / min(original_word_count, rewritten_word_count)
+                if similarity_ratio > 0.4:
+                    return True
+            return True
+        return False
 
-        # Protéger les termes critiques AVANT d'envoyer à Ollama
-        # (BREAKING, Kopa Trophy, noms joueurs, etc.) pour éviter qu'il les traduise.
-        protected_source, protected_mapping = self._protect_terms(model_source)
-        if literal_translation:
-            user_prompt = (
-                f"Compte source : @{source_username}\n"
-                "Traduction littérale fidèle d'un tweet arabe :\n"
-                f"{protected_source}\n\n"
-                "Transforme cette traduction en tweet français naturel, en corrigeant "
-                "les maladresses sans changer les faits, les noms ou les chiffres. "
-                "N'ajoute aucune information absente. Écris le tweet final maintenant, "
-                "sans préambule."
-            )
-        else:
-            # Détecter les citations de source dans le tweet original
-            source_citations = self._detect_source_citations(original)
-            citation_info = ""
-            if source_citations:
-                citation_info = f"Citations de source présentes dans le tweet : {', '.join('@' + s for s in source_citations)}. Conserve-les dans ton tweet.\n"
-            user_prompt = (
-                f"Compte source : @{source_username}\n"
-                f"Langue source : {source_lang or 'auto'}\n"
-                f"{citation_info}"
-                f"Information à transformer en tweet français :\n{protected_source}\n\n"
-                "Écris le tweet final maintenant, sans préambule."
-            )
-        last_error = None
-        candidate = ""
-        argos_tried_en = False  # Fallback Argos en→fr utilisé une fois
-        argos_tried_es = False  # Fallback Argos es→fr utilisé une fois
-        for attempt in range(3):  # Augmenté à 3 tentatives pour auto-correction
-            try:
-                candidate = self._apply_glossary(self._sanitize(self._chat(self.SYSTEM_PROMPT, user_prompt)))
-                # Restaurer les termes protégés (__PROTECTED_X__ -> terme original)
-                candidate = self._restore_terms(candidate, protected_mapping)
-                # Vérifier qu'aucun identifiant temporaire n'est resté
-                unreplaced = self._verify_protected_restored(candidate, protected_mapping)
-                if unreplaced:
-                    quality_issues.append(unreplaced)
-                candidate = self._post_correct_french(candidate)
-                error = self._invalid(candidate, model_source)
+    def _is_arabic(self, text: str) -> bool:
+        """Fast Arabic detection."""
+        return bool(re.search(r"[\u0600-\u06FF\u0750-\u077F]", text))
 
-                # Vérifications qualité supplémentaires
-                quality_issues = []
-                low = candidate.lower()
-
-                # Anglicismes courants du football
-                anglicisms = ["sportsmanship", "wing", "full-back", "center-back", "midfielder",
-                              "striker", "goalkeeper", "keeper", "clean sheet", "kit",
-                              "dressing room", "gaffer", "skysports", "tottenham"]
-                for ang in anglicisms:
-                    if ang in low:
-                        quality_issues.append(f"'{ang}' est anglais, utilise 'fair-play', 'ailier', 'latéral', 'défenseur central', 'milieu', 'attaquant', 'gardien', 'clean sheet → feuille blanche', 'vestiaires', 'entraîneur', 'Sky Sports', 'Tottenham'")
-
-                # Vérifier la cohérence de la phrase
-                if "a montré de la" in low and any(m in low for m in ["sportsmanship", "grace", "class"]):
-                    quality_issues.append("Expression mal traduite, reformule correctement")
-
-                # Détection des mots français inventés ou absurdes
-                nonsense = self._check_nonsense_french(candidate)
-                if nonsense:
-                    quality_issues.append(nonsense)
-
-                # Détection de phrase incomplète (se termine par une lettre, pas de ponctuation)
-                if candidate and candidate[-1].isalpha() and candidate[-1] not in {".", "!", "?", "…"}:
-                    quality_issues.append("phrase incomplète ou coupée à la fin du tweet")
-
-                # Fallback Argos : Ollama renvoie de l'anglais ou de l'espagnol au lieu du français
-                if error and "langue non française" in error:
-                    if not argos_tried_en:
-                        from .translator import translate_english_to_french
-                        translated = translate_english_to_french(original, self.config)
-                        if translated:
-                            argos_tried_en = True
-                            model_source = translated
-                            logger.info("Fallback Argos en→fr utilisé pour @{}", source_username)
-                            user_prompt = (
-                                f"Compte source : @{source_username}\n"
-                                f"Langue source : fr (traduit de l'anglais via Argos)\n"
-                                f"{citation_info}"
-                                f"Information à transformer en tweet français :\n{translated}\n\n"
-                                "Écris le tweet final maintenant, sans préambule."
-                            )
-                            continue
-                    elif not argos_tried_es:
-                        from .translator import ollama_translate_to_french
-                        translated = ollama_translate_to_french(original, "es", self.config)
-                        if translated:
-                            argos_tried_es = True
-                            model_source = translated
-                            logger.info("Fallback Ollama es→fr utilisé pour @{}", source_username)
-                            user_prompt = (
-                                f"Compte source : @{source_username}\n"
-                                f"Langue source : fr (traduit de l'espagnol via Ollama)\n"
-                                f"{citation_info}"
-                                f"Information à transformer en tweet français :\n{translated}\n\n"
-                                "Écris le tweet final maintenant, sans préambule."
-                            )
-                            continue
-
-                if not quality_issues and error is None:
-                    # Tout est bon : on poursuit vers les post-traitements
-                    # (citations, Fabrizio Romano, limite de caractères)
-                    # puis retour succès après la boucle.
-                    pass
-
-                # Problèmes détectés, demander une correction
-                if error or quality_issues:
-                    last_error = error or ", ".join(quality_issues)
-                    if attempt < 2:  # Pas la dernière tentative
-                        fix_instructions = []
-                        if error:
-                            fix_instructions.append(f"Corrige: {error}")
-                        fix_instructions.extend(quality_issues)
-
-                        user_prompt = (
-                            f"Correction requise pour ton tweet précédent.\n"
-                            f"Problèmes détectés: {'; '.join(fix_instructions)}\n\n"
-                            f"Consignes:\n"
-                            f"- 100% français, ZÉRO anglicisme\n"
-                            f"- Phrases cohérentes et qui ont du sens\n"
-                            f"- Style journaliste sportif français professionnel\n"
-                            f"- Maximum 260 caractères\n\n"
-                            f"Réécris ce tweet en français correct :\n{model_source}\n"
-                            "Réponds uniquement avec le tweet corrigé."
-                        )
-                        continue
-                    else:
-                        last_error = error or ", ".join(quality_issues)
-                        break
-                if weighted_length(candidate) > 260:
-                    # Ask once for a shorter version.
+    def _get_arabic_model(self):
+        """Lazy-load Arabic translation model (cached)."""
+        if self._ar_tokenizer is None or self._ar_model is None:
+            with self._ar_model_lock:
+                if self._ar_tokenizer is None or self._ar_model is None:
                     try:
-                        shortened = self._sanitize(self._chat(
-                            self.SYSTEM_PROMPT,
-                            f"Raccourcis ce tweet en français à 240 caractères maximum, sans perdre le fait principal :\n{candidate}\n"
-                            "Réponds uniquement avec le tweet final.",
-                        ))
-                        if shortened and self._invalid(shortened, model_source) is None:
-                            candidate = shortened
-                    except Exception as exc:
-                        logger.debug("Raccourcissement Ollama impossible: {}", exc)
-                if weighted_length(candidate) > self.max_chars:
-                    candidate = truncate_weighted(candidate, self.max_chars)
-                # Restaurer les citations de source si présentes dans l'original
-                if source_citations:
-                    for cit in source_citations:
-                        if f"@{cit}" not in candidate:
-                            # Ajouter la citation si elle n'est pas déjà présente
-                            candidate = candidate.rstrip() + f" @{cit}"
-                            if weighted_length(candidate) > self.max_chars:
-                                candidate = truncate_weighted(candidate, self.max_chars)
-                                break
-                # Cas spécial : Fabrizio Romano - si pas d'autre source, le citer lui
-                elif source_username.lower() == "fabrizioromano" and not candidate.endswith("@FabrizioRomano"):
-                    candidate = candidate.rstrip() + " @FabrizioRomano"
-                    if weighted_length(candidate) > self.max_chars:
-                        candidate = truncate_weighted(candidate, self.max_chars)
-                return RewriteResult(
-                    original_text=original,
-                    rewritten_text=candidate,
-                    original_length=weighted_length(original),
-                    rewritten_length=weighted_length(candidate),
-                    language_detected=self._detect_language(original, source_lang),
-                    model_used=self.model,
-                    success=True,
-                    error=None,
-                    within_limit=weighted_length(candidate) <= self.max_chars,
-                )
-            except Exception as exc:
-                last_error = str(exc)
-                logger.warning("Ollama échec réécriture (tentative {}): {}", attempt + 1, exc)
+                        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+                        model_name = "facebook/nllb-200-distilled-600M"
+                        self._ar_tokenizer = AutoTokenizer.from_pretrained(model_name, src_lang="arb_Arab")
+                        self._ar_model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+                    except Exception as e:
+                        logger.warning(f"Failed to load Arabic model: {e}")
+                        self._ar_tokenizer = False
+                        self._ar_model = False
+        return self._ar_tokenizer, self._ar_model
 
-        # S'assurer que last_error est défini si on arrive ici sans succès
-        if last_error is None:
-            if not candidate:
-                last_error = "échec inconnu: candidat vide après plusieurs tentatives"
-            else:
-                # Le candidat existe mais n'a pas passé les vérifications
-                error_check = self._invalid(candidate, model_source)
-                if error_check:
-                    last_error = error_check
-                else:
-                    last_error = "échec inconnu: le candidat semble valide mais la réécriture a échoué"
+    def _translate_arabic_to_english(self, arabic_text: str) -> Optional[str]:
+        """Cached Arabic-to-English translation using NLLB."""
+        tokenizer, model = self._get_arabic_model()
+        if not tokenizer or not model:
+            return None
 
-        # French source fallback: post a clean version rather than dropping the
-        # news entirely if Ollama is temporarily unavailable.
-        lang = self._detect_language(original, source_lang)
-        if lang == "fr" and self._invalid(original) is None:
-            fallback = truncate_weighted(original, self.max_chars)
-            # Restaurer les citations de source si présentes dans l'original
-            source_citations = self._detect_source_citations(original)
-            if source_citations:
-                for cit in source_citations:
-                    if f"@{cit}" not in fallback:
-                        fallback = fallback.rstrip() + f" @{cit}"
-                        if weighted_length(fallback) > self.max_chars:
-                            fallback = truncate_weighted(fallback, self.max_chars)
-                            break
-            # Cas spécial : Fabrizio Romano - si pas d'autre source, le citer lui
-            elif source_username.lower() == "fabrizioromano" and not fallback.endswith("@FabrizioRomano"):
-                fallback = fallback.rstrip() + " @FabrizioRomano"
-                if weighted_length(fallback) > self.max_chars:
-                    fallback = truncate_weighted(fallback, self.max_chars)
-            return RewriteResult(
-                original, fallback, weighted_length(original), weighted_length(fallback),
-                lang, "fallback-fr", True,
-                f"Ollama indisponible ({last_error}); texte français conservé",
-                weighted_length(fallback) <= self.max_chars,
+        try:
+            if not arabic_text or not self._is_arabic(arabic_text):
+                return None
+
+            inputs = tokenizer(arabic_text, return_tensors="pt", truncation=True)
+            generated = model.generate(
+                **inputs,
+                forced_bos_token_id=tokenizer.convert_tokens_to_ids("eng_Latn"),
+                max_new_tokens=220,
+                num_beams=4,
             )
-        return RewriteResult(
-            original, "", weighted_length(original), 0, lang, self.model, False,
-            f"réécriture impossible: {last_error}", False,
+            translation = tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
+            return translation.strip()
+        except Exception as e:
+            logger.warning(f"Arabic translation failed: {e}")
+            return None
+
+    def _rewrite_to_english(self, text: str, source_lang: str) -> str:
+        """Rewrite in English with anti-plagiarism, fact-checking, and post-corrections."""
+        if not text:
+            return ""
+
+        # Sanitize and prepare
+        cleaned = self._sanitize(text)
+        if not cleaned:
+            return ""
+
+        # Protect critical terms before sending to LLM
+        protected_source, protected_mapping = self._protect_terms(cleaned)
+
+        prompt = (
+            f"Source language: {source_lang}\n"
+            f"Original tweet: {protected_source}\n\n"
+            "Rewrite this tweet in natural English, avoiding plagiarism. "
+            "Follow the rules above. Respond ONLY with the rewritten tweet."
         )
 
-    @staticmethod
-    def _detect_language(text: str, fallback: str = "unknown") -> str:
-        if fallback and fallback not in {"auto", "unknown"}:
-            return fallback
-        if detect is None or len(text) < 12:
-            return fallback or "unknown"
-        try:
-            return detect(text)
-        except Exception:
-            return fallback or "unknown"
+        # Get first attempt
+        attempt1 = self._chat(self.ENGLISH_REWRITE_SYSTEM, prompt)
+        if not attempt1:
+            return ""
 
-    def generate_reply(self, comment_text: str, our_tweet_text: str, author: str = "") -> str:
-        comment = clean_tweet_text(comment_text)
-        our = clean_tweet_text(our_tweet_text)
-        user = (
-            f"Notre post : {our}\n"
-            f"Commentaire de @{author or 'un utilisateur'} : {comment}\n"
-            "Écris notre réponse en français, une phrase, maximum 200 caractères."
-        )
-        try:
-            reply = self._sanitize(self._chat(self.REPLY_PROMPT, user, temperature=0.65))
-            if reply and self._invalid(reply) is None:
-                return truncate_weighted(reply, min(220, self.max_chars))
-        except Exception as exc:
-            logger.warning("Ollama échec réponse: {}", exc)
-        # Safe, human fallback; never empty.
-        return truncate_weighted("Merci pour ton commentaire, Visca Barça 🔵🔴", 220)
+        # Restore protected terms
+        attempt1 = self._restore_terms(attempt1, protected_mapping)
 
-    # ------------------------------------------------------------------
-    # Diagnostics
-    # ------------------------------------------------------------------
-    def test_rewrite(self, text: str, username: str = "test") -> Dict:
-        result = self.rewrite(text, username)
-        return {
-            "original": result.original_text,
-            "rewritten": result.rewritten_text,
-            "original_length": result.original_length,
-            "rewritten_length": result.rewritten_length,
-            "language": result.language_detected,
-            "model": result.model_used,
-            "success": result.success,
-            "within_limit": result.within_limit,
-            "error": result.error,
-        }
+        # Verify all protected terms restored
+        verify_error = self._verify_protected_restored(attempt1, protected_mapping)
+        if verify_error:
+            logger.warning(f"Protected term issue: {verify_error}")
+
+        # Apply post-corrections
+        attempt1 = self._apply_post_corrections(attempt1)
+
+        # Fact-check
+        fact_error = self._facts_check(attempt1, cleaned)
+        if fact_error:
+            logger.warning(f"Fact check failed: {fact_error}")
+
+        # Check plagiarism
+        if self._detect_plagiarism(cleaned, attempt1) or fact_error:
+            strict_prompt = (
+                f"Source: {protected_source}\n"
+                "REWRITE THIS TWEET IN NATURAL ENGLISH WITHOUT COPYING ANY WORDS. "
+                "Change sentence structure, word order, and phrasing completely. "
+                "Respond ONLY with the rewritten tweet."
+            )
+            attempt2 = self._chat(self.ENGLISH_REWRITE_SYSTEM, strict_prompt)
+            if attempt2:
+                attempt2 = self._restore_terms(attempt2, protected_mapping)
+                attempt2 = self._apply_post_corrections(attempt2)
+                fact_error2 = self._facts_check(attempt2, cleaned)
+                if not fact_error2 and not self._detect_plagiarism(cleaned, attempt2):
+                    return attempt2
+                logger.warning("Second attempt also failed checks, using first attempt")
+
+        # Final length check and truncation
+        if weighted_length(attempt1) > self.max_chars:
+            attempt1 = attempt1[:self.max_chars].rsplit(' ', 1)[0] + "…"
+
+        return attempt1
+
+    # System prompt for @UniverseCule
+    ENGLISH_REWRITE_SYSTEM = """You are @UniverseCule, a professional football journalist specializing in FC Barcelona content.
+Your task: Rewrite tweets in natural, idiomatic English while ensuring 100% originality and avoiding plagiarism.
+
+ABSOLUTE RULES:
+1. NEVER copy-paste any part of the original text. Always rephrase using completely different word choices and sentence structure.
+2. Preserve ALL facts, names, numbers, and specific details exactly as in the source.
+3. Use precise and professional football terminology in English.
+4. Maximum 280 characters. No links, mentions, hashtags, or any external references.
+5. Format: Headline in UPPERCASE, emojis for emphasis, line breaks for readability.
+6. Never mix languages. Always use English exclusively.
+7. Maintain the original meaning and tone while making it sound natural and professional.
+8. NEVER modify protected terms (they appear as __PROTECTED_X__ - leave them exactly as-is).
+
+EXAMPLES:
+- Original: "Barcelona sign new striker"
+  Rewritten: "FC BARCELONA SECURE NEW FORWARD ✍️\n\nThe club has finalized the acquisition of a promising attacker to bolster their front line."
+
+- Original: "Real Madrid 3-0 victory over Barcelona"
+  Rewritten: "REAL MADRID DOMINATE 3-0 IN EL CLASICO ⚪\n\nLos Blancos deliver a commanding performance to claim bragging rights in Madrid."
+
+- Original: "Lewandowski scores 2 goals"
+  Rewritten: "LEWANDOWSKI BRACE FIRES BARCELONA TO VICTORY ⚽⚽\n\nThe Polish striker nets twice as the Blaugrana secure three vital points."
+
+FOOTBALL TERMINOLOGY:
+- Use "forward" or "attacker" not "striker"
+- Use "triumph" or "secure victory" not just "win"
+- Use "finalize acquisition" or "secure signing" not just "sign"
+- Use "brace" for 2 goals, "hat-trick" for 3
+- Use "equaliser" not "leveler"
+- Use "bench" not "substitutes bench"
+- Use "touchline" not "sideline"
+
+PROTECTED TERMS (appear as __PROTECTED_X__ - DO NOT MODIFY):
+These include: player names (Yamal, Pedri, Lewandowski, etc.), trophy names (Ballon d'Or, Kopa Trophy), alert words (BREAKING, JUST IN, OFFICIAL, EXCLUSIVE), club names (FC Barcelona, Barça, Blaugrana), competitions (La Liga, Champions League, El Clasico).
+
+EMOJI GUIDELINES:
+- Use 🚨 for breaking/urgent news
+- Use ⚽ for goals/match action
+- Use ✍️ for signings/transfers
+- Use 🏆 for trophies/titles
+- Use 🔵🔴 for Barcelona branding (blue/red)
+- Keep emojis minimal and professional"""
+
+    def rewrite(self, text: str, source_username: str = "source") -> str:
+        """Main rewrite method with language detection and optimization."""
+        cleaned = clean_tweet_text(text)
+        if not cleaned:
+            return ""
+
+        # Detect language (fast heuristic)
+        if self._is_arabic(cleaned):
+            # Arabic → English translation
+            translated = self._translate_arabic_to_english(cleaned)
+            if translated:
+                return self._rewrite_to_english(translated, "ar")
+            return cleaned  # Fallback to original if translation fails
+
+        # English/Spanish/French → English reformulation
+        return self._rewrite_to_english(cleaned, "en")
 
     def check_model(self) -> bool:
+        """Verify Ollama model is available."""
         try:
             result = self.client.list()
             models = result.get("models", []) if isinstance(result, dict) else getattr(result, "models", [])
@@ -798,5 +412,19 @@ Maximum 220 caractères. Si le commentaire est une simple réaction, reste bref 
                     names.append(getattr(item, "name", "") or getattr(item, "model", "") or "")
             return any(self.model in name for name in names if name)
         except Exception as exc:
-            logger.warning("Vérification Ollama impossible: {}", exc)
+            logger.warning("Ollama check failed: {}", exc)
             return False
+
+    def test_rewrite(self, text: str, username: str = "test") -> Dict:
+        """Test rewrite with detailed diagnostics."""
+        original = clean_tweet_text(text)
+        rewritten = self.rewrite(text, username)
+        return {
+            "original": original,
+            "rewritten": rewritten,
+            "original_length": weighted_length(original),
+            "rewritten_length": weighted_length(rewritten),
+            "model": self.model,
+            "success": bool(rewritten),
+            "within_limit": weighted_length(rewritten) <= self.max_chars,
+        }

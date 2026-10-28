@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Arret du bot @UniversCule
+title Arret du bot @UniverseCule
 cd /d "%~dp0"
 setlocal enabledelayedexpansion
 

@@ -133,7 +133,10 @@ class ContentDeduplicator:
             return None
         if self._llm_client is None:
             try:
-                self._llm_client = ollama.Client(host=self.config.ollama.host)
+                self._llm_client = ollama.Client(
+                    host=self.config.ollama.host,
+                    timeout=self.config.ollama.timeout_seconds,
+                )
             except Exception as exc:
                 self._llm_failed = True
                 logger.warning("Vérification Ollama de doublons indisponible: {}", exc)
@@ -164,7 +167,11 @@ class ContentDeduplicator:
                 ],
                 options={"temperature": 0.0, "num_predict": 8},
             )
-            content = response.get("message", {}).get("content", "") if isinstance(response, dict) else getattr(response, "message", {}).get("content", "")
+            if isinstance(response, dict):
+                content = response.get("message", {}).get("content", "")
+            else:
+                message = getattr(response, "message", None)
+                content = getattr(message, "content", "") if message is not None else ""
             answer = (content or "").strip().upper()
             if "OUI" in answer and "NON" not in answer:
                 return True

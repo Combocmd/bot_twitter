@@ -1,62 +1,61 @@
-# 🤖 Barcelona Twitter Bot - @UniversCule
+# 🤖 Barcelona Twitter Bot - @UniverseCule
 
-**Version 1.1.2** — voir [CHANGELOG.md](CHANGELOG.md).
+**Version 1.2.0** — International English edition for @UniverseCule.
 
-Bot Twitter autonome pour le média football **@UniversCule** (FC Barcelona).  
-Surveille 7 comptes sources, réécrit l'info en français naturel, poste avec médias, répond aux commentaires pertinents.
+Autonomous Twitter bot for FC Barcelona media **@UniverseCule**. Monitors 8 Barça sources, rewrites content in natural English, posts with media. No auto-replies, manual control only.
 
-## ✨ Fonctionnalités
+## ✨ Features
 
-| Fonction | Description |
-|----------|-------------|
-| **Veille multi-sources** | Polling 7 comptes toutes les 1 min |
-| **Détection Barça only** | Mots-clés joueurs, club, compétitions, staff |
-| **Dédoublonnage sémantique** | Embeddings locales (sentence-transformers) - évite les doublons cross-sources |
-| **Réécriture humaine** | Ollama local (qwen2.5:7b) - style journaliste/supporter, traduction auto → FR |
-| **Support médias** | Télécharge et re-upload images des tweets sources |
-| **Planification humaine** | 24h/24 (plage configurable), 80 max/jour, publication immédiate |
-| **Réponses intelligentes** | Filtre pertinence + bots, délai 20-30 min, FR uniquement |
-| **100% Gratuit & Local** | Aucune API payante, tout tourne sur votre machine |
+| Feature | Description |
+|---------|-------------|
+| **Multi-source monitoring** | Polls 8 accounts every 1 minute |
+| **Barça-only detection** | Keywords for players, club, competitions, staff |
+| **Semantic deduplication** | Local embeddings (sentence-transformers) - prevents cross-source duplicates |
+| **Human-like rewriting** | Local Ollama (qwen2.5:7b) - professional journalist style, auto-translation to English |
+| **Media support** | Downloads and re-uploads images from source tweets |
+| **Human scheduling** | 24/7 (configurable window), 80 max/day, immediate publishing |
+| **100% Free & Local** | No paid API, everything runs on your machine |
+| **Manual operation** | Start/stop manually via `demarrer.bat` / `arreter.bat` |
 
 ## 🏗 Architecture
 
 ```
 src/
-├── config.py          # Configuration centralisée (YAML + env)
-├── database.py        # SQLite (tweets, sources, commentaires, médias, stats)
-├── twitter_client.py  # Wrapper API v2 (rate limit, retry, media upload)
+├── config.py          # Centralized config (YAML + env)
+├── database.py        # SQLite (tweets, sources, media, stats)
+├── twitter_client.py  # API v2 wrapper (rate limit, retry, media upload)
 ├── monitor.py         # Polling sources (1 min)
-├── filter.py          # Détection contenu Barça (regex + contexte)
-├── dedup.py           # Dédoublonnage par embeddings (cosine similarity)
-├── rewriter.py        # Réécriture Ollama + limite 280 chars
-├── scheduler.py       # Queue posting + timing humain (APScheduler)
-├── reply_manager.py   # Surveillance mentions + réponses pertinentes
+├── filter.py          # Barça content detection (regex + context)
+├── dedup.py           # Deduplication via embeddings (cosine similarity)
+├── rewriter.py        # Ollama rewriting + 280 char limit + fact-checking
+├── scheduler.py       # Queue posting + human timing (APScheduler)
 └── main.py            # Orchestration + CLI (start, test, status, stats)
 ```
 
-## 📋 Prérequis
+## 📋 Prerequisites
 
 - **Python 3.10+**
-- **Ollama** (pour le LLM local) - [ollama.com/download](https://ollama.com/download)
-- **Compte Twitter Developer** (API v2, OAuth 1.0a, Read+Write)
+- **Ollama** (for local LLM) - [ollama.com/download](https://ollama.com/download)
+- **Twitter Developer Account** (API v2, OAuth 1.0a, Read+Write)
+- **Brave/Chrome** (for session export)
 
 ## 🚀 Installation
 
 ```bash
-# 1. Cloner / aller dans le dossier
+# 1. Clone / go to folder
 cd D:\projets\bot_twitter
 
-# 2. Lancer le setup automatique
+# 2. Run automatic setup
 python setup.py
-#   → Crée .venv, installe deps, installe Ollama (Windows), pull qwen2.5:7b
+#   → Creates .venv, installs deps, installs Ollama (Windows), pulls qwen2.5:7b
 
-# 3. Configurer les clés Twitter
-# Éditez .env avec vos 4 clés (depuis developer.twitter.com)
+# 3. Configure Twitter keys
+# Edit .env with your 4 keys (from developer.twitter.com)
 ```
 
 ## ⚙️ Configuration
 
-### .env (obligatoire)
+### .env (required)
 ```env
 TWITTER_API_KEY=your_key
 TWITTER_API_SECRET=your_secret
@@ -65,163 +64,168 @@ TWITTER_ACCESS_TOKEN_SECRET=your_token_secret
 
 OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=qwen2.5:7b
+OLLAMA_TEMPERATURE=0.20
+OLLAMA_TIMEOUT_SECONDS=45
 ```
 
-### config.yaml (personnalisable)
-- `sources.accounts` : comptes à surveiller
-- `barca_keywords` : mots-clés détection (joueurs, club, compétitions)
-- `scheduling` : horaires, volume, intervalles
-- `replies` : délais, seuils pertinence
-- `deduplication` : seuil similarité (0.82), fenêtre temporelle
+### config.yaml (customizable)
+- `sources.accounts` : accounts to monitor
+- `barca_keywords` : detection keywords (players, club, competitions, staff)
+- `scheduling` : hours, volume, intervals
+- `deduplication` : similarity threshold (0.82), time window
+- `ollama.temperature` : 0.20 for less hallucination
 
-## 🎮 Utilisation
+## 🎮 Usage
 
-### Démarrage rapide (Windows)
+### Quick Start (Windows)
 
-| Action | Comment |
-|---|---|
-| **Démarrer** | Double-clic sur `demarrer.bat` |
-| **Arrêter** | Double-clic sur `arreter.bat` (ou Ctrl+C dans la fenêtre) |
+| Action | How |
+|--------|-----|
+| **Start** | Double-click `demarrer.bat` |
+| **Stop** | Double-click `arreter.bat` (or Ctrl+C in window) |
 
-La fenêtre du bot doit rester ouverte pendant qu'il tourne. Si une instance
-tourne déjà, `demarrer.bat` refuse de démarrer une seconde instance et indique
-son PID.
+The bot window must stay open while running. If an instance is already running, `demarrer.bat` refuses to start a second one and shows its PID.
 
-### Commandes
+### Commands
 
 ```bash
-# Activer l'environnement
+# Activate environment
 .venv\Scripts\activate    # Windows
 source .venv/bin/activate # Linux/Mac
 
-# Test complet (dry-run - ne poste rien)
+# Full test (dry-run - posts nothing)
 python -m src.main test
 
-# Vérifier la config
+# Check config & sessions
 python -m src.main status
 
-# Voir les stats
+# View stats
 python -m src.main stats
 
-# Test rewriter sur un texte
+# Test rewriter on text
 python -m src.main test-rewrite "Barcelona sign new striker!"
 
-# Test filtre Barça
+# Test Barça filter
 python -m src.main test-filter "Real Madrid win 3-0"
 
-# Démarrer le bot (daemon)
+# Start bot (daemon)
 python -m src.main start
 
-# Arrêt propre : Ctrl+C
+# Clean stop: Ctrl+C
 ```
 
-## 🔄 Comment ça marche
+## 🔄 How It Works
 
 ```
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│  POLLING    │───▶│   FILTRE    │───▶│  DEDUP      │───▶│  REWRITE    │
-│   (1 min)   │    │  Barça only │    │  Sémantique │    │  (Ollama)   │
+│  POLLING    │───▶│   FILTER    │───▶│  DEDUP      │───▶│  REWRITE    │
+│   (1 min)   │    │  Barça only │    │  Semantic   │    │  (Ollama)   │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
-                                                                      │
+                                                                       │
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                ▼
-│  REPLIES    │◀───│  SCHEDULER  │◀───│   QUEUE     │    ┌─────────────┐
-│  (20-30 min)│    │  Humain     │    │  (24h/24)   │◀───│  POST TWEET │
+│  QUEUE      │◀───│  SCHEDULER  │◀───│   POST      │    ┌─────────────┐
+│  (24h/24)   │    │  Human      │    │  TWEET      │◀───│  MEDIA      │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
 ```
 
-1. **Polling** : Récupère les nouveaux tweets des 7 sources (1 min, sources < 2 min)
-2. **Filtre** : Garde seulement le contenu Barça (mots-clés + contexte)
-3. **Mode match** : Détecté via le calendrier Barça (cache 6 h, `Europe/Madrid`) — pendant un match, seuls les tweets avec image/vidéo passent
-4. **Dedup source** : Compare embeddings + texte source — rejette si > 82 % similaire à 48 h
-5. **Rewrite** : Ollama reformule en français ; glossaire football, rejet des anglicismes, des scores/chiffres inventés et des élisions cassées ; deuxième tentative puis rejet
-6. **Dedup événement** : Compare le texte réécrit aux tweets en file/publiés — même événement = un seul post ; une version avec média remplace la version sans média encore en file
-7. **Media** : Télécharge images/vidéos sources → re-upload Twitter → attache au tweet
-8. **Schedule** : Place en file avec timing humain (jitter, limites journalières)
-9. **Post** : Worker APScheduler poste aux créneaux calculés ; session `@UniversCule` vérifiée avant chaque post, pause + arrêt de l'ingestion si elle est invalide. Jamais plus d'un post par minute (protection anti-burst), et si X renvoie sa limite quotidienne, la file est reportée à la réinitialisation sans perdre les tweets ni consommer d'essai.
-10. **Replies** : Surveille les mentions sur NOS tweets → filtre pertinence → répond 20-30 min après
+1. **Polling**: Fetches new tweets from 8 sources (1 min, sources < 2 min old)
+2. **Filter**: Keeps only Barça content (keywords + football context)
+3. **Match mode**: Detected via Barça calendar (6h cache, `Europe/Madrid`) — during matches, only tweets with media pass
+4. **Source dedup**: Compares embeddings + source text — rejects if > 82% similar within 48h
+5. **Rewrite**: Ollama reformulates in English; protected terms (player names, trophies), fact-checking (numbers, scores), anti-plagiarism, post-corrections; second attempt on failure then reject
+6. **Event dedup**: Compares rewritten text against queued/published tweets — same event = single post; version with media replaces media-less version in queue
+7. **Media**: Downloads source images/videos → re-uploads to X → attaches to tweet
+8. **Schedule**: Queues with human timing (jitter, daily limits, min 60s between posts)
+9. **Post**: APScheduler worker posts at calculated slots; @UniverseCule session verified before each post; pauses ingestion if invalid. Hard limit 80/day, max 1 post/minute. Daily limit hit → queue deferred to reset without losing tweets.
 
-### Qualité éditoriale
+**No auto-replies** - replies are manual only.
 
-Avant toute mise en file, un tweet doit passer :
+### Editorial Quality Gates
 
-- français correct, sans anglais résiduel (`the`, `goal`, `substitution`, `enters`…) ;
-- vocabulaire football français (`égalise`, `remplacement`, `entre en jeu`, `sort`) ;
-- aucun chiffre, score ou minute absent de la source ;
-- pas d'élision cassée (`l' 2e`, `l'2e`) ;
-- pas de doublon d'événement avec la file ou les publications récentes ;
-- média annoncé mais non téléchargeable → tweet ignoré (jamais de texte seul à la place).
+Before queueing, every tweet must pass:
 
-Si une règle échoue : nouvelle réécriture. Si la deuxième tentative échoue aussi, le tweet est rejeté (mieux vaut perdre un tweet que publier une erreur). Le motif exact est écrit dans les logs.
+- ✅ Correct English, no residual foreign words
+- ✅ Professional football terminology (brace, equaliser, finalize acquisition, touchline, bench)
+- ✅ No invented numbers, scores, or minutes not in source
+- ✅ Protected terms preserved (player names, trophies, BREAKING/JUST IN/OFFICIAL/EXCLUSIVE)
+- ✅ No event duplicate with queue or recent publications
+- ✅ Announced media fails download → tweet rejected (never text-only fallback)
 
-## 🛠 Personnalisation
+If a gate fails: second rewrite attempt. If second attempt fails, tweet rejected (better to lose a tweet than publish an error). Exact reason logged.
 
-### Ajouter des comptes sources
+## 🛠 Customization
+
+### Add Source Accounts
 ```yaml
 # config.yaml
 sources:
   accounts:
     - "Forca_Fcb"
-    - "NouveauCompte"
+    - "NewAccount"
 ```
 
-### Modifier le style de réécriture
-Éditez `src/rewriter.py` → `SYSTEM_PROMPT` et `FEW_SHOT_EXAMPLES`
+### Adjust Rewrite Style
+Edit `src/rewriter.py` → `ENGLISH_REWRITE_SYSTEM` and `_PROTECTED_TERMS`
 
-### Ajuster la détection Barça
+### Tune Barça Detection
 ```yaml
 # config.yaml
 barca_keywords:
   players: [...]
   club: [...]
   competitions: [...]
+  staff: [...]
 ```
 
-### Changer le modèle Ollama
+### Change Ollama Model
 ```yaml
 # config.yaml
 ollama:
-  model: "llama3.1:8b"  # ou mistral:7b, qwen2.5:14b, etc.
+  model: "llama3.1:8b"  # or mistral:7b, qwen2.5:14b, etc.
 ```
 
 ## 📊 Monitoring & Logs
 
-- **Logs** : `logs/bot.log` (rotation 10MB, 5 fichiers)
-- **Stats journalières** : table `bot_stats` en base
-- **CLI** : `python -m src.main status` / `stats`
+- **Logs**: `logs/bot.log` (rotation 10MB, 5 files)
+- **Daily stats**: `bot_stats` table in database
+- **CLI**: `python -m src.main status` / `stats`
 
-## 🐛 Dépannage
+## 🐛 Troubleshooting
 
-| Problème | Solution |
-|----------|----------|
-| Ollama non trouvé | `setup.py` l'installe, ou installez manuellement |
-| Modèle non pullé | `ollama pull qwen2.5:7b` |
-| Rate limit Twitter | Le bot gère automatiquement (backoff exponentiel) |
-| Médias non uploadés | Vérifiez taille < 5MB, format supporté |
-| Réponses pas envoyées | Vérifiez `replies.enabled: true`, logs pour debug |
-| Erreur embedding | `pip install --upgrade sentence-transformers torch` |
+| Issue | Solution |
+|-------|----------|
+| Ollama not found | `setup.py` installs it, or install manually |
+| Model not pulled | `ollama pull qwen2.5:7b` |
+| Rate limit X | Bot handles automatically (exponential backoff) |
+| Media not uploading | Check size < 5MB, supported format |
+| Embedding error | `pip install --upgrade sentence-transformers torch` |
+| Writer session invalid | Log into @UniverseCule in Brave/Chrome, export session to `data/x_universecule_state.json` |
 
-## 📁 Structure des données
+## 📁 Data Structure
 
 ```
 data/
-├── bot.db              # SQLite (tweets, sources, replies, media, stats)
-└── media_cache/        # Cache local médias téléchargés
+├── bot.db              # SQLite (tweets, sources, media, stats)
+├── media_cache/        # Local media download cache
+├── x_reader_state.json # Read-only session (auto-imported from Firefox)
+└── x_universecule_state.json  # Writer session (manual export from Brave/Chrome)
 
 logs/
-└── bot.log             # Logs rotatifs
+└── bot.log             # Rotating logs
 ```
 
-## 🔐 Sécurité
+## 🔐 Security
 
-- **Jamais** committer `.env` (dans .gitignore)
-- Clés Twitter en variables d'environnement seulement
-- Base SQLite locale, pas de cloud
-- Ollama 100% local, aucune donnée ne sort
+- **Never** commit `.env` (in .gitignore)
+- Twitter keys in environment variables only
+- Local SQLite database, no cloud
+- Ollama 100% local, no data leaves your machine
+- Browser sessions stored locally only
 
-## 📝 Licence
+## 📝 License
 
-MIT - Libre d'utilisation et modification.
+MIT - Free to use and modify.
 
 ---
 
-**Créé pour @UniversCule** - *Visca el Barça!* 🔵🔴
+**Built for @UniverseCule** - *Visca el Barça!* 💙❤️

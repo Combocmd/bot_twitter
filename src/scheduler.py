@@ -1,6 +1,6 @@
 """Persistent, human-like posting queue.
 
-The account's hard cap is 50 create-tweet calls per local day. Original posts
+The account's hard cap is configured create-tweet calls per local day. Original posts
 are capped by ``original_tweets_per_day``; the remaining slots are reserved for
 replies. Each claim is atomic and a post is never retried after an uncertain
 result, which prevents duplicate tweets after a crash or a slow X response.
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -120,11 +121,25 @@ class PostScheduler:
     def _posted_today(self) -> int:
         return self.db.get_today_posted_count(self.cfg.timezone)
 
-    def _replies_sent_today(self) -> int:
-        return self.db.get_today_replies_sent(self.cfg.timezone)
+    @staticmethod
+    def _publication_safety_error(text: str) -> Optional[str]:
+        """Final fail-closed check immediately before calling X.
 
-    def _pending_replies(self) -> int:
-        return self.db.get_pending_replies_count()
+        The rewriter validates and corrects generated text earlier, but the
+        queue is persistent and can also contain an older item. Nothing with
+        a known editorial defect should reach the browser composer.
+        """
+        if not text or not text.strip():
+            return "texte vide"
+        if weighted_length(text) > 280:
+            return "tweet trop long"
+        if re.search(r"\bblock\s+bas\b", text, re.IGNORECASE):
+            return "anglicisme détecté: block bas"
+        has_circles = "🔵" in text or "🔴" in text
+        has_hearts = "💙" in text or "❤️" in text or "❤" in text
+        if has_circles and has_hearts:
+            return "familles d'emojis Barça mélangées"
+        return None
 
     @property
     def publishing_paused(self) -> bool:
@@ -134,17 +149,12 @@ class PostScheduler:
         """How many more original posts may be scheduled today."""
         posted = self.db.get_posted_count_for_local_day(tz_name=self.cfg.timezone)
         queued = self.db.count_queue_for_local_day(tz_name=self.cfg.timezone)
-        replies_sent = self._replies_sent_today()
-        pending_replies = min(
-            self._pending_replies(),
-            max(0, self.config.replies.max_replies_per_day - replies_sent),
-        )
-        # Reserve actual pending reply slots so the total never passes 50.
+        # No replies system - all slots available for original posts
         max_originals = min(
             self.cfg.original_tweets_per_day,
-            self.cfg.max_tweets_per_day - replies_sent - pending_replies,
+            self.cfg.max_tweets_per_day - posted - queued,
         )
-        return max(0, max_originals - posted - queued)
+        return max(0, max_originals)
 
     def _last_scheduled_for_day(self, day: date) -> Optional[datetime]:
         zone = get_zone(self.cfg.timezone)
@@ -179,14 +189,9 @@ class PostScheduler:
         queued = self.db.count_queue_for_local_day(day, self.cfg.timezone)
         if day == today:
             posted = self.db.get_posted_count_for_local_day(day, self.cfg.timezone)
-            replies_sent = self._replies_sent_today()
-            pending_replies = min(
-                self._pending_replies(),
-                max(0, self.config.replies.max_replies_per_day - replies_sent),
-            )
             max_originals = min(
                 self.cfg.original_tweets_per_day,
-                self.cfg.max_tweets_per_day - replies_sent - pending_replies,
+                self.cfg.max_tweets_per_day - posted,
             )
             if posted + queued >= max_originals:
                 return None
@@ -242,18 +247,29 @@ class PostScheduler:
         source_tweet_id: Optional[str] = None,
         source_username: Optional[str] = None,
         media_paths: Optional[List[str]] = None,
+        source_created_at: Optional[datetime] = None,
+        source_observed_at: Optional[datetime] = None,
     ) -> Dict:
         text = (text or "").strip()
         if not text:
             raise ValueError("Texte vide")
         
-        if source_tweet_id:
-            source_time = self.db.get_source_tweet_timestamp(source_username)
-            if source_time:
-                time_elapsed = now_utc() - source_time
-                if time_elapsed > timedelta(minutes=2):
-                    logger.warning(f"Tweet {source_tweet_id} trop vieux ({time_elapsed.total_seconds():.0f}s). Ignoré.")
-                    raise ValueError("Tweet trop vieux pour être publié (max 2 minutes).")
+        if source_tweet_id and source_created_at is not None:
+            source_time = parse_dt(source_created_at)
+            if source_time is None:
+                raise ValueError("Date du tweet source invalide.")
+            # Freshness is checked when the monitor observes the source. The
+            # rewrite/media pipeline can legitimately take longer than two
+            # minutes; the queue's separate five-minute age check remains the
+            # guard against publishing an item that waited too long.
+            validation_now = source_observed_at or now_utc()
+            time_elapsed = validation_now - source_time
+            if time_elapsed > timedelta(minutes=2) or time_elapsed < timedelta(minutes=-2):
+                logger.warning(
+                    "Tweet {} hors fenêtre de fraîcheur ({:.0f}s). Ignoré.",
+                    source_tweet_id, time_elapsed.total_seconds(),
+                )
+                raise ValueError("Tweet trop vieux ou daté du futur (fenêtre: 2 minutes).")
 
         length = weighted_length(text)
         if length > self.config.length.max_chars:
@@ -273,7 +289,7 @@ class PostScheduler:
         )
         posted_row_id = self.db.add_posted_tweet(
             source_tweet_id=source_tweet_id or f"queue-{queue_id}",
-            source_username=source_username or "UniversCule",
+            source_username=source_username or "UniverseCule",
             source_text=text,
             rewritten_text=text,
             media_ids=paths,
@@ -302,7 +318,7 @@ class PostScheduler:
             return []
         if self._limit_until and now_utc() < self._limit_until:
             return []
-        total_today = self._posted_today() + self._replies_sent_today()
+        total_today = self._posted_today()
         if total_today >= self.cfg.max_tweets_per_day:
             logger.warning("Plafond dur de {} posts/jour atteint", self.cfg.max_tweets_per_day)
             return []
@@ -325,7 +341,11 @@ class PostScheduler:
         # Vérifier l'âge du tweet en file d'attente (max 5 minutes)
         created_at = row.get("created_at")
         if created_at:
-            tweet_age = now_utc() - parse_dt(created_at)
+            created_dt = parse_dt(created_at)
+            if created_dt is None:
+                self.db.set_queue_failed(row["id"], "date de création invalide")
+                return []
+            tweet_age = now_utc() - created_dt
             if tweet_age > timedelta(minutes=5):
                 logger.warning("Tweet #{} trop vieux ({} min). Supprimé de la file.", 
                               row["id"], int(tweet_age.total_seconds() / 60))
@@ -343,6 +363,12 @@ class PostScheduler:
     def _post_queued_tweet(self, row: Dict) -> Optional[Dict]:
         queue_id = int(row["id"])
         text = row.get("text") or ""
+        safety_error = self._publication_safety_error(text)
+        if safety_error:
+            self.db.set_queue_failed(queue_id, f"contrôle de sécurité: {safety_error}")
+            self.db.update_daily_stats(errors_count=1)
+            logger.error("Publication bloquée pour #{}: {}", queue_id, safety_error)
+            return {"queue_id": queue_id, "status": "failed", "error": safety_error}
         raw_paths = row.get("media_paths") or row.get("media_ids")
         paths: List[str] = []
         if raw_paths:
@@ -356,7 +382,7 @@ class PostScheduler:
         try:
             tweet_id = self.web.post_tweet(text, media_paths=paths)
         except XWebAuthError as exc:
-            logger.critical("Session @UniversCule invalide; file mise en pause: {}", exc)
+            logger.critical("Session @UniverseCule invalide; file mise en pause: {}", exc)
             self._auth_failed = True
             self.db.set_queue_failed(queue_id, f"auth: {exc}")
             self.db.update_daily_stats(errors_count=1)
@@ -415,7 +441,7 @@ class PostScheduler:
                     self.db.delete_cached_media_by_path(path)
                 except OSError as exc:
                     logger.warning("Nettoyage média impossible {}: {}", path, exc)
-            logger.info("Post publié: https://x.com/UniversCule/status/{}", tweet_id)
+            logger.info("Post publié: https://x.com/UniverseCule/status/{}", tweet_id)
             return {"queue_id": queue_id, "status": "posted", "tweet_id": tweet_id}
 
     # ------------------------------------------------------------------

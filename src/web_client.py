@@ -1,4 +1,4 @@
-"""Free X publishing through the logged-in @UniversCule web session.
+"""Free X publishing through the logged-in @UniverseCule web session.
 
 The X API write endpoint now requires paid credits ("402 credits depleted").
 This client uses Playwright and the normal web composer instead. It is slower
@@ -58,7 +58,7 @@ class XWebClient:
         self.config = config or get_config()
         self.timeout_ms = max(15000, int(self.config.x_web.timeout_seconds * 1000))
         self.headless = bool(self.config.x_web.headless)
-        self.expected_handle = str(self.config.x_web.expected_handle or "UniversCule").lstrip("@")
+        self.expected_handle = str(self.config.x_web.expected_handle or "UniverseCule").lstrip("@")
         state_file = Path(self.config.x_web.state_file)
         self.state_path = state_file if state_file.is_absolute() else PROJECT_ROOT / state_file
         self.profile_path = _project_path(getattr(self.config.x_web, "profile_dir", "data/x_universcule_profile"))
@@ -130,7 +130,7 @@ class XWebClient:
             text = account.inner_text()
         except Exception as exc:
             raise XWebAuthError(
-                "Session web @UniversCule invalide ou expirée. "
+                "Session web @UniverseCule invalide ou expirée. "
                 "Reconnectez le compte et réexportez la session."
             ) from exc
         handle = f"@{self.expected_handle}".lower()
@@ -216,58 +216,56 @@ class XWebClient:
         if inputs.count() == 0:
             raise XWebMediaError("Champ d'import d'image X introuvable")
         inputs = inputs.last
-        # Retry automatique sur l'upload d'image (X est parfois capricieux)
+        # Retry the complete upload-and-wait operation. The previous code could
+        # break out of the wait loop without actually starting a new upload.
         last_exc: Optional[Exception] = None
+        upload_errors = (
+            "La photo n'a pas pu être téléversée",
+            "The photo could not be uploaded",
+            "impossible de téléverser",
+            "could not upload",
+            "Une erreur s'est produite",
+        )
         for attempt in range(3):
             try:
                 inputs.set_input_files(valid)
-                break  # Upload lance avec succes
+                deadline = time.time() + 60
+                while time.time() < deadline:
+                    try:
+                        attachments = page.locator('[data-testid="attachments"]')
+                        count = attachments.locator('img, video').count()
+                        if count == 0:
+                            count = attachments.locator('[role="progressbar"]').count()
+                    except Exception:
+                        count = 0
+                    if count >= len(valid):
+                        return
+                    try:
+                        body = page.locator("body").inner_text().lower()
+                    except Exception:
+                        body = ""
+                    matching_error = next(
+                        (message for message in upload_errors if message.lower() in body),
+                        None,
+                    )
+                    if matching_error:
+                        raise XWebMediaError(
+                            f"Échec du téléversement de l'image: {matching_error}"
+                        )
+                    page.wait_for_timeout(500)
+                raise XWebMediaError("Délai dépassé pendant le téléversement de l'image")
             except Exception as exc:
                 last_exc = exc
                 if attempt < 2:
                     logger.warning(
-                        "Upload media tentative {} echouee, retry: {}", attempt + 1, exc
+                        "Upload media tentative {} échouée, nouvelle tentative: {}",
+                        attempt + 1, exc,
                     )
                     page.wait_for_timeout(2000)
                 else:
-                    raise XWebMediaError(f"Import de l'image impossible apres 3 tentatives: {last_exc}") from last_exc
-        # Wait for X to finish its upload and show previews.
-        deadline = time.time() + 60
-        while time.time() < deadline:
-            try:
-                attachments = page.locator('[data-testid="attachments"]')
-                count = attachments.locator('img, video').count()
-                if count == 0:
-                    count = attachments.locator('[role="progressbar"]').count()
-            except Exception:
-                count = 0
-            body = ""
-            try:
-                body = page.locator("body").inner_text()
-            except Exception:
-                pass
-            if count >= len(valid):
-                return
-            for error_text in (
-                "La photo n'a pas pu être téléversée",
-                "The photo could not be uploaded",
-                "impossible de téléverser",
-                "could not upload",
-                "Une erreur s'est produite",
-            ):
-                if error_text.lower() in body.lower():
-                    # X affiche une erreur: on retry l'upload si possible
-                    if attempt < 2:
-                        logger.warning(
-                            "X signale une erreur d'upload, retry ({}/3): {}",
-                            attempt + 1, error_text,
-                        )
-                        break  # sort de la boucle while, retente le set_input_files
-                    raise XWebMediaError(f"Échec du téléversement de l'image: {error_text}")
-            page.wait_for_timeout(500)
-        else:
-            # Boucle while terminee sans return ni raise -> delai depasse
-            raise XWebMediaError("Délai dépassé pendant le téléversement de l'image")
+                    raise XWebMediaError(
+                        f"Import du média impossible après 3 tentatives: {last_exc}"
+                    ) from last_exc
 
     @staticmethod
     def _extract_tweet_id(payload: Dict) -> Optional[str]:

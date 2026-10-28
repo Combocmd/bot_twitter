@@ -3,7 +3,7 @@
 The bot never asks for the account password. It reuses an already logged-in
 browser session:
 
-* ``data/x_universcule_state.json`` is the @UniversCule writing session
+* ``data/x_universecule_state.json`` is the @UniverseCule writing session
   (exported from a logged-in Brave/Chrome profile).
 * ``data/x_reader_state.json`` is a read-only session used to browse public
   source profiles and comment threads. It is imported automatically from
@@ -24,7 +24,7 @@ from loguru import logger
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 READER_STATE = DATA_DIR / "x_reader_state.json"
-WRITER_STATE = DATA_DIR / "x_universcule_state.json"
+WRITER_STATE = DATA_DIR / "x_universecule_state.json"
 
 
 class XSessionError(RuntimeError):
@@ -190,7 +190,7 @@ def ensure_writer_state(force: bool = False) -> Path:
             load_state(WRITER_STATE)
             return WRITER_STATE
         except XSessionError:
-            logger.warning("Session @UniversCule invalide.")
+            logger.warning("Session @UniverseCule invalide.")
     # Try Firefox as a fallback only if the user also has the writer account
     # logged in there.
     cookies = import_firefox_cookies()
@@ -200,8 +200,8 @@ def ensure_writer_state(force: bool = False) -> Path:
         # fallback only; writer state must be explicitly exported.
         del candidate
     raise XSessionError(
-        f"Session @UniversCule introuvable ou invalide: {WRITER_STATE}. "
-        "Connectez @UniversCule dans Brave/Chrome et exportez la session "
+        f"Session @UniverseCule introuvable ou invalide: {WRITER_STATE}. "
+        "Connectez @UniverseCule dans Brave/Chrome et exportez la session "
         "(voir README, section Sessions)."
     )
 

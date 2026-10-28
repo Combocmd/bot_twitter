@@ -309,7 +309,7 @@ def print_banner():
     banner = """
 +==============================================================+
 |  Barcelona Twitter Bot - Setup                               |
-|  Configuration complete pour @UniversCule                    |
+|  Configuration complete pour @UniverseCule                    |
 +==============================================================+
 """
     print(banner)

@@ -1,39 +1,29 @@
-# Configuration du Bot Twitter @UniversCule (Média Barça)
-# Toutes les valeurs sensibles sont dans .env
+# Configuration du Bot Twitter @UniverseCule (Média Barça International)
 
 twitter: {}
 
-# Publication gratuite via la session web @UniversCule (pas d'API payante)
 x_web:
-  state_file: "data/x_universcule_state.json"
-  profile_dir: "data/x_universcule_profile"
-  expected_handle: "UniversCule"
+  state_file: "data/x_universecule_state.json"
+  profile_dir: "data/x_universecule_profile"
+  expected_handle: "UniverseCule"
   headless: true
-  timeout_seconds: 60
+  timeout_seconds: 45
 
-# Lecture publique via la session Firefox @XenoSama__ (cookies importés)
 x_reader:
   state_file: "data/x_reader_state.json"
   headless: true
-  timeout_seconds: 90
+  timeout_seconds: 60
 
 ollama:
   host: "http://localhost:11434"
   model: "qwen2.5:7b"
-  timeout_seconds: 60
-  temperature: 0.75
+  timeout_seconds: 45
+  temperature: 0.20
 
 embeddings:
   model_name: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
   similarity_threshold: 0.82
   batch_size: 32
-
-# Traduction locale dédiée pour les sources arabes (NLLB), puis réécriture Ollama
-translation:
-  enabled: true
-  model_name: "facebook/nllb-200-distilled-600M"
-  max_new_tokens: 220
-  num_beams: 3
 
 sources:
   accounts:
@@ -45,19 +35,16 @@ sources:
     - "barcacentre"
     - "FCBarcelona"
     - "FabrizioRomano"
-  # RSS feeds for sources that have them (free alternative to Twitter API)
   rss_feeds:
     BarcaUniversal: "https://barcauniversal.com/feed/"
 
 polling:
-  # Veille chaque minute; seuls les contenus âgés de 2 minutes maximum sont acceptés.
   interval_minutes: 1
   lookback_minutes: 2
   max_results_per_source: 20
   max_candidates_per_cycle: 60
 
 barca_keywords:
-  # Joueurs actuels (noms + variantes)
   players:
     - "yamal"
     - "lamine yamal"
@@ -65,30 +52,24 @@ barca_keywords:
     - "robert lewandowski"
     - "pedri"
     - "gavi"
-    - "pablo gavi"
     - "araujo"
     - "ronald araujo"
     - "cubarsi"
     - "pau cubarsi"
     - "balde"
-    - "alex balde"
     - "ter stegen"
-    - "marc andre ter stegen"
     - "terstegen"
     - "fermin"
     - "fermin lopez"
     - "olmo"
     - "dani olmo"
     - "szczesny"
-    - "wojciech szczesny"
     - "inaki pena"
     - "iñaki peña"
     - "eric garcia"
     - "eric garcía"
     - "christensen"
-    - "andreas christensen"
     - "kounde"
-    - "jules kounde"
     - "koundé"
     - "raphinha"
     - "ferran"
@@ -98,50 +79,43 @@ barca_keywords:
     - "de jong"
     - "frenkie de jong"
     - "hector fort"
-    - "héctor fort"
     - "marc casado"
+    - "casado"
     - "marc bernal"
+    - "bernal"
 
-  # Club & identité
   club:
     - "barça"
     - "barca"
     - "barcelona"
     - "fc barcelona"
-    - "fc barcelone"
+    - "fcbarcelona"
     - "blaugrana"
     - "blaugranes"
     - "culé"
-    - "cules"
-    - "catalunya"
-    - "catalogne"
+    - "cule"
+    - "culers"
     - "la masia"
-    - "la masía"
     - "masia"
     - "camp nou"
     - "spotify camp nou"
     - "estadi olimpic"
-    - "estadi olímpic"
+    - "montjuic"
 
-  # Compétitions & contextes
   competitions:
     - "liga"
     - "la liga"
     - "laliga"
     - "champions"
     - "champions league"
-    - "ligue des champions"
+    - "ucl"
     - "copa del rey"
-    - "coupe du roi"
     - "supercopa"
-    - "supercoupe"
     - "clasico"
     - "clásico"
     - "el clasico"
     - "el clásico"
-    - "real madrid"  # seulement dans contexte clasico/rivalité
 
-  # Staff & direction
   staff:
     - "flick"
     - "hansi flick"
@@ -151,7 +125,6 @@ barca_keywords:
 
 blacklist_keywords:
   keywords:
-    # Autres clubs sans lien Barça
     - "manchester united"
     - "manchester city"
     - "liverpool"
@@ -168,54 +141,26 @@ blacklist_keywords:
     - "napoli"
     - "roma"
     - "lazio"
-    - "atletico"  # sauf si contexte Barça
-    - "sevilla"   # sauf si contexte Barça
-    - "valencia"  # sauf si contexte Barça
+    - "atletico"
+    - "sevilla"
+    - "valencia"
     - "betis"
     - "villarreal"
-    - "athletic"
-    - "mallorca"
+    - "athletic bilbao"
     - "girona"
     - "osasuna"
-    - "alaves"
-    - "alavés"
     - "getafe"
-    - "cadiz"
-    - "cádiz"
-    - "rayo"
     - "celta"
-    - "almeria"
-    - "almería"
-    - "granada"
-    - "huesca"
-    - "eibar"
-    - "leganes"
-    - "leganés"
 
 scheduling:
   active_hours_start: 0
   active_hours_end: 24
   timezone: "Europe/Madrid"
-  # Plafond configuré du compte : 80 posts originaux maximum par jour
   max_tweets_per_day: 80
   original_tweets_per_day: 80
-  # Publication immédiate dès qu'un contenu est validé.
   min_interval_minutes: 0
   max_interval_minutes: 0
   jitter_minutes: 0
-
-replies:
-  # Les réponses automatiques sont désactivées : elles seront faites manuellement.
-  enabled: false
-  check_interval_minutes: 5
-  min_delay_minutes: 20
-  max_delay_minutes: 30
-  relevance_threshold: 0.6
-  language: "fr"
-  max_replies_per_day: 15
-  max_tweets_to_check: 8
-  max_age_hours: 48
-  min_comment_length: 4
 
 length:
   max_chars: 280
@@ -247,7 +192,7 @@ media:
   enabled: true
   max_size_mb: 5
   max_video_size_mb: 50
-  timeout_seconds: 60
+  timeout_seconds: 45
   cache_dir: "data/media_cache"
   max_images_per_tweet: 4
   max_media_per_tweet: 4

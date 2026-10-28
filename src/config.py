@@ -36,10 +36,10 @@ class TwitterConfig(BaseModel):
 
 
 class XWebConfig(BaseModel):
-    """Browser session used to publish as @UniversCule (free, no API write)."""
-    state_file: str = "data/x_universcule_state.json"
-    profile_dir: str = "data/x_universcule_profile"
-    expected_handle: str = "UniversCule"
+    """Browser session used to publish as @UniverseCule (free, no API write)."""
+    state_file: str = "data/x_universecule_state.json"
+    profile_dir: str = "data/x_universecule_profile"
+    expected_handle: str = "UniverseCule"
     headless: bool = True
     timeout_seconds: int = 45
 
@@ -55,7 +55,24 @@ class OllamaConfig(BaseModel):
     host: str = "http://localhost:11434"
     model: str = "qwen2.5:7b"
     timeout_seconds: int = 60
-    temperature: float = 0.75
+    temperature: float = 0.30
+
+    @model_validator(mode="before")
+    @classmethod
+    def load_from_env(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Allow documented Ollama environment variables to override YAML."""
+        values = dict(data or {}) if isinstance(data, dict) else {}
+        env_fields = {
+            "host": "OLLAMA_HOST",
+            "model": "OLLAMA_MODEL",
+            "timeout_seconds": "OLLAMA_TIMEOUT_SECONDS",
+            "temperature": "OLLAMA_TEMPERATURE",
+        }
+        for field, env_name in env_fields.items():
+            env_value = os.getenv(env_name)
+            if env_value:
+                values[field] = env_value
+        return values
 
 
 class EmbeddingsConfig(BaseModel):
@@ -69,14 +86,6 @@ class EmbeddingsConfig(BaseModel):
         if not 0 <= v <= 1:
             raise ValueError("similarity_threshold must be between 0 and 1")
         return v
-
-
-class TranslationConfig(BaseModel):
-    """Dedicated local translator used for Arabic sources before Ollama."""
-    enabled: bool = True
-    model_name: str = "facebook/nllb-200-distilled-600M"
-    max_new_tokens: int = 220
-    num_beams: int = 3
 
 
 class SourcesConfig(BaseModel):
@@ -162,33 +171,6 @@ class SchedulingConfig(BaseModel):
         return f"{self.active_hours_start}h–{self.active_hours_end}h"
 
 
-class RepliesConfig(BaseModel):
-    enabled: bool = True
-    check_interval_minutes: int = 5
-    min_delay_minutes: int = 20
-    max_delay_minutes: int = 30
-    relevance_threshold: float = 0.6
-    language: str = "fr"
-    max_replies_per_day: int = 15
-    max_tweets_to_check: int = 8
-    max_age_hours: int = 48
-    min_comment_length: int = 4
-
-    @field_validator("relevance_threshold")
-    @classmethod
-    def check_threshold(cls, v: float) -> float:
-        if not 0 <= v <= 1:
-            raise ValueError("relevance_threshold must be between 0 and 1")
-        return v
-
-    @field_validator("max_replies_per_day", "max_tweets_to_check", "max_age_hours")
-    @classmethod
-    def check_positive(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("Must be positive")
-        return v
-
-
 class LengthConfig(BaseModel):
     max_chars: int = 280
 
@@ -259,13 +241,11 @@ class Config(BaseModel):
     x_reader: XReaderConfig = Field(default_factory=XReaderConfig)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)
-    translation: TranslationConfig = Field(default_factory=TranslationConfig)
     sources: SourcesConfig = Field(default_factory=SourcesConfig)
     polling: PollingConfig = Field(default_factory=PollingConfig)
     barca_keywords: BarcaKeywordsConfig = Field(default_factory=BarcaKeywordsConfig)
     blacklist_keywords: BlacklistConfig = Field(default_factory=BlacklistConfig)
     scheduling: SchedulingConfig = Field(default_factory=SchedulingConfig)
-    replies: RepliesConfig = Field(default_factory=RepliesConfig)
     length: LengthConfig = Field(default_factory=LengthConfig)
     deduplication: DeduplicationConfig = Field(default_factory=DeduplicationConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
