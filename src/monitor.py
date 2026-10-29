@@ -105,6 +105,7 @@ class SourceMonitor:
         originals = [
             t for t in tweets
             if not t.is_retweet
+            and not t.is_quote
             and not t.reply_to
             and t.author_username.lower() == username.lower()
             and t.id

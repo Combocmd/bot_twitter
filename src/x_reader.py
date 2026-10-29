@@ -41,6 +41,7 @@ class ReadTweet:
     reply_to: Optional[str] = None
     conversation_id: Optional[str] = None
     is_retweet: bool = False
+    is_quote: bool = False
     reply_count: int = 0
     like_count: int = 0
     url: str = ""
@@ -58,6 +59,7 @@ class ReadTweet:
             "reply_to": self.reply_to,
             "conversation_id": self.conversation_id,
             "is_retweet": self.is_retweet,
+            "is_quote": self.is_quote,
             "reply_count": self.reply_count,
             "like_count": self.like_count,
             "url": self.url,
@@ -222,6 +224,10 @@ class XReader:
             conversation_id=(str(legacy["conversation_id_str"])
                              if legacy.get("conversation_id_str") else None),
             is_retweet=bool(legacy.get("retweeted_status_result")),
+            is_quote=any(
+                ref.get("type") == "quoted" 
+                for ref in (tweet.get("referenced_tweets") or [])
+            ),
             reply_count=int(legacy.get("reply_count") or 0),
             like_count=int(legacy.get("favorite_count") or 0),
             url=f"https://x.com/{author}/status/{tweet_id}",

@@ -132,6 +132,22 @@ class TweetRewriter:
         (re.compile(r"\bOFFICIAL:\s*official\b", re.IGNORECASE), "OFFICIAL:"),
     ]
 
+    # All known Barça players + staff for validation (must match _PROTECTED_TERMS)
+    _VALID_NAMES = {
+        # Players
+        "Yamal", "Lamine Yamal", "Pedri", "Gavi", "De Jong", "Frenkie de Jong",
+        "Lewandowski", "Robert Lewandowski", "Raphinha", "Kounde", "Jules Kounde",
+        "Araujo", "Ronald Araujo", "Balde", "Alejandro Balde", "Ter Stegen",
+        "Marc-Andre ter Stegen", "Fermin", "Fermin Lopez", "Olmo", "Dani Olmo",
+        "Torres", "Ferran Torres", "Fati", "Ansu Fati", "Garcia", "Eric Garcia",
+        "Martinez", "Inigo Martinez", "Christensen", "Andreas Christensen",
+        "Pena", "Inaki Pena", "Szczesny", "Wojciech Szczesny", "Fort", "Hector Fort",
+        "Casado", "Marc Casado", "Bernal", "Marc Bernal", "Torre", "Pablo Torre",
+        "Cubarsi", "Pau Cubarsi",
+        # Staff
+        "Flick", "Hansi Flick", "Deco", "Laporta", "Joan Laporta",
+    }
+
     def __init__(self, config=None):
         self.config = config or get_config()
         self.client = ollama.Client(host=self.config.ollama.host)
@@ -156,14 +172,32 @@ class TweetRewriter:
             logger.warning(f"Ollama error: {e}")
             return ""
 
-    def _sanitize(self, text: str) -> str:
-        """Ultra-fast text sanitization."""
+    def _sanitize(self, text: str) -> tuple[str, Optional[str]]:
+        """Ultra-fast text sanitization. Returns (cleaned_text, source_mention)."""
         text = clean_tweet_text(text)
         text = re.sub(r"https?://\S+", "", text)
+        
+        # Extract source mention from end of tweet: (@user), [@user], via @user, etc.
+        source_mention = None
+        # Pattern for (@user), [@user], (@user) at end of text
+        source_pattern = re.compile(r'\s*[\(\[]\s*@(\w+)\s*[\)\]]\s*$')
+        match = source_pattern.search(text)
+        if match:
+            source_mention = match.group(1)
+            text = text[:match.start()].rstrip()
+        else:
+            # Also check for "via @user" at end
+            via_pattern = re.compile(r'\s+via\s+@(\w+)\s*$', re.IGNORECASE)
+            match = via_pattern.search(text)
+            if match:
+                source_mention = match.group(1)
+                text = text[:match.start()].rstrip()
+        
+        # Remove any remaining mentions (not the source one we extracted)
         text = re.sub(r"(?<!\w)@\w+", "", text)
         text = re.sub(r"#\w+", "", text)
         text = re.sub(r"\s+", " ", text).strip()
-        return text
+        return text, source_mention
 
     def _protect_terms(self, text: str) -> tuple[str, Dict[str, str]]:
         """Replace protected terms with temporary placeholders."""
@@ -203,10 +237,21 @@ class TweetRewriter:
         """Extract all score patterns (X-Y) from text."""
         return set(re.findall(r"(\d{1,3})\s*-\s*(\d{1,3})", text))
 
-    def _facts_check(self, rewritten: str, source: str) -> Optional[str]:
+    def _facts_check(self, rewritten: str, source: str, source_mention: Optional[str] = None) -> Optional[str]:
         """Reject any number or score that does not exist in the source."""
         src_numbers = self._extract_numbers(source)
+        
+        # Exclude numbers from source mention (e.g., @10JoseAlvarez -> "10" is not a fact)
+        if source_mention:
+            source_mention_numbers = self._extract_numbers(source_mention)
+            src_numbers = src_numbers - source_mention_numbers
+        
         out_numbers = self._extract_numbers(rewritten)
+        # Also exclude numbers from source mention in the output (e.g., [@10JoseAlvarez])
+        if source_mention:
+            source_mention_numbers = self._extract_numbers(source_mention)
+            out_numbers = out_numbers - source_mention_numbers
+        
         missing = sorted(n for n in out_numbers if n not in src_numbers)
         if missing:
             return f"number not in source: {', '.join(missing)}"
@@ -217,6 +262,124 @@ class TweetRewriter:
             if score not in src_scores:
                 return f"score not in source: {score[0]}-{score[1]}"
         return None
+
+    def _extract_names(self, text: str) -> Set[str]:
+        """Extract all known player/staff names from text (case-insensitive)."""
+        found = set()
+        text_lower = text.lower()
+        for name in self._VALID_NAMES:
+            # Use word boundaries to avoid partial matches
+            if re.search(rf"\b{re.escape(name.lower())}\b", text_lower):
+                found.add(name)
+        return found
+
+    def _validate_names(self, rewritten: str, source: str, vision_context: Optional[Dict] = None, source_mention: Optional[str] = None, source_username: str = "source") -> Optional[str]:
+        """Reject if any player/staff name from source is missing in rewritten, or if rewritten has names not in source/vision."""
+        source_names = self._extract_names(source)
+        
+        # Add vision-detected names to allowed list
+        allowed_names = set(source_names)
+        if vision_context and vision_context.get("players_detected"):
+            for vname in vision_context["players_detected"]:
+                for valid_name in self._VALID_NAMES:
+                    if valid_name.lower() in vname.lower() or vname.lower() in valid_name.lower():
+                        allowed_names.add(valid_name)
+        
+        rewritten_names = self._extract_names(rewritten)
+        
+        # Check for missing source names (MUST be preserved)
+        missing = source_names - rewritten_names
+        if missing:
+            return f"missing source names in rewrite: {', '.join(sorted(missing))}"
+        
+        # Check for missing source mention (always validate source_username attribution)
+        expected_source = f"[@{source_username}]"
+        if expected_source not in rewritten:
+            return f"missing source mention in rewrite: {expected_source}"
+        
+        # Check for missing source_mention (if tweet cites a different source)
+        if source_mention and source_mention.lower() != source_username.lower():
+            expected_mention = f"[@{source_mention}]"
+            if expected_mention not in rewritten:
+                return f"missing source mention in rewrite: {expected_mention}"
+            # Also add to allowed names so it's not flagged as hallucinated
+            allowed_names.add(expected_mention)
+        
+        # Check for hallucinated names (NOT in source or vision)
+        hallucinated = rewritten_names - allowed_names
+        if hallucinated:
+            return f"hallucinated names not in source/vision: {', '.join(sorted(hallucinated))}"
+        return None
+
+    def _is_english_only(self, text: str) -> bool:
+        """Check if text contains only English/Latin characters, numbers, punctuation, and common emojis."""
+        # Allow: Latin letters, numbers, common punctuation, spaces, common emojis
+        # Common emoji ranges
+        emoji_ranges = [
+            (0x1F600, 0x1F64F),  # Emoticons
+            (0x1F300, 0x1F5FF),  # Misc Symbols and Pictographs
+            (0x1F680, 0x1F6FF),  # Transport and Map
+            (0x1F1E0, 0x1F1FF),  # Flags
+            (0x2600, 0x26FF),    # Misc symbols
+            (0x2700, 0x27BF),    # Dingbats
+            (0xFE00, 0xFE0F),    # Variation selectors
+            (0x1F900, 0x1F9FF),  # Supplemental Symbols and Pictographs
+        ]
+        
+        def is_emoji(cp):
+            for start, end in emoji_ranges:
+                if start <= cp <= end:
+                    return True
+            return False
+        
+        for char in text:
+            cp = ord(char)
+            # Allow ASCII (Latin letters, numbers, punctuation, space)
+            if cp <= 0x7F:
+                continue
+            # Allow common Latin extended (accents, etc.)
+            if 0x80 <= cp <= 0x024F:
+                continue
+            # Allow emojis
+            if is_emoji(cp):
+                continue
+            # If we get here, it's likely non-Latin (Chinese, Arabic, Cyrillic, etc.)
+            return False
+        return True
+
+    def _fix_missing_names(self, text: str, source: str, vision_context: Optional[Dict] = None) -> str:
+        """Try to fix rewrite by adding missing source names naturally."""
+        source_names = self._extract_names(source)
+        
+        # Add vision-detected names to allowed list
+        allowed_names = set(source_names)
+        if vision_context and vision_context.get("players_detected"):
+            for vname in vision_context["players_detected"]:
+                for valid_name in self._VALID_NAMES:
+                    if valid_name.lower() in vname.lower() or vname.lower() in valid_name.lower():
+                        allowed_names.add(valid_name)
+        
+        rewritten_names = self._extract_names(text)
+        missing = source_names - rewritten_names
+        
+        if not missing:
+            return text
+        
+        # Try to prepend missing names in a natural way
+        missing_list = sorted(missing)
+        if len(missing_list) == 1:
+            prefix = f"{missing_list[0]}: "
+        else:
+            prefix = f"{', '.join(missing_list)}: "
+        
+        # Check if adding prefix would exceed 280 chars
+        from .timeutil import weighted_length
+        if weighted_length(prefix + text) <= self.max_chars:
+            return prefix + text
+        
+        # If too long, try to integrate more subtly
+        # Just return original text if we can't fix it cleanly
+        return text
 
     def _apply_post_corrections(self, text: str) -> str:
         """Apply deterministic post-corrections."""
@@ -283,22 +446,25 @@ class TweetRewriter:
             logger.warning(f"Arabic translation failed: {e}")
             return None
 
-    def _rewrite_to_english(self, text: str, source_lang: str, vision_context: Optional[Dict] = None) -> str:
+    def _rewrite_to_english(self, text: str, source_lang: str, vision_context: Optional[Dict] = None, source_username: str = "source") -> str:
         """Rewrite in English with anti-plagiarism, fact-checking, and post-corrections."""
         if not text:
             return ""
 
         # Sanitize and prepare
-        cleaned = self._sanitize(text)
+        cleaned, source_mention = self._sanitize(text)
         if not cleaned:
             return ""
 
         # Build vision context string for prompt
         vision_prompt = ""
+        required_names = []
         if vision_context:
             vision_parts = []
             if vision_context.get("players_detected"):
                 vision_parts.append(f"Players visible: {', '.join(vision_context['players_detected'])}")
+                # Add vision names to required names
+                required_names.extend(vision_context['players_detected'])
             if vision_context.get("scene_type") and vision_context["scene_type"] != "unknown":
                 vision_parts.append(f"Scene: {vision_context['scene_type']}")
             if vision_context.get("text_extracted"):
@@ -308,6 +474,32 @@ class TweetRewriter:
             if vision_parts:
                 vision_prompt = "\n\nVISION CONTEXT (from media analysis):\n" + "\n".join(vision_parts)
 
+        required_names = []
+        if vision_context and vision_context.get("players_detected"):
+            required_names.extend(vision_context["players_detected"])
+
+        # Attribution logic: source_mention takes priority for suffix
+        # If source_mention exists, it will be the suffix; source_username is NOT added to required_names
+        # If source_mention is None, source_username is used as suffix (for Barça/mercato tweets)
+        attribution_source = source_mention if source_mention else source_username
+        required_names.append(f"[@{attribution_source}]")
+
+        source_names = self._extract_names(cleaned)
+        for name in source_names:
+            if name not in required_names:
+                required_names.append(name)
+
+        seen_lower = set()
+        deduped_names = []
+        for name in required_names:
+            name_lower = name.lower()
+            if name_lower not in seen_lower:
+                seen_lower.add(name_lower)
+                deduped_names.append(name)
+
+        required_names = deduped_names
+        required_names_str = ", ".join(required_names) if required_names else "none"
+
         # Protect critical terms before sending to LLM
         protected_source, protected_mapping = self._protect_terms(cleaned)
 
@@ -315,8 +507,13 @@ class TweetRewriter:
             f"Source language: {source_lang}\n"
             f"Original tweet: {protected_source}"
             f"{vision_prompt}\n\n"
+            f"REQUIRED NAMES (must ALL appear in rewrite): {required_names_str}\n\n"
             "Rewrite this tweet in natural English, avoiding plagiarism. "
-            "Use the vision context to enhance accuracy and add relevant visual details. "
+            "Only use vision context for player names or text visible in media. "
+            "Do NOT add scene descriptions or inferred details not in the source text. "
+            "CRITICAL: Every name in REQUIRED NAMES must appear in your output. Do not omit any. "
+            "FORMAT: Start with 🚨. Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. "
+            "State each fact exactly once — no redundant repetition of names or information. "
             "Follow the rules above. Respond ONLY with the rewritten tweet."
         )
 
@@ -337,25 +534,38 @@ class TweetRewriter:
         attempt1 = self._apply_post_corrections(attempt1)
 
         # Fact-check
-        fact_error = self._facts_check(attempt1, cleaned)
+        fact_error = self._facts_check(attempt1, cleaned, source_mention)
         if fact_error:
             logger.warning(f"Fact check failed: {fact_error}")
 
+        # Name validation (must preserve ALL source names, no hallucination)
+        name_error = self._validate_names(attempt1, cleaned, vision_context, source_mention, source_username)
+        if name_error:
+            logger.warning(f"Name validation failed: {name_error}")
+
         # Check plagiarism
-        if self._detect_plagiarism(cleaned, attempt1) or fact_error:
+        if self._detect_plagiarism(cleaned, attempt1) or fact_error or name_error:
             strict_prompt = (
                 f"Source: {protected_source}"
                 f"{vision_prompt}\n\n"
+                f"REQUIRED NAMES (must ALL appear in rewrite): {required_names_str}\n\n"
                 "REWRITE THIS TWEET IN NATURAL ENGLISH WITHOUT COPYING ANY WORDS. "
                 "Change sentence structure, word order, and phrasing completely. "
+                "CRITICAL: Every name in REQUIRED NAMES must appear in your output. Do not omit any. "
+                "Do NOT add any player or staff names that are not in the source text or vision context. "
+                "Only use vision context for player names or text visible in media. "
+                "Do NOT add scene descriptions or inferred details not in the source text. "
+                "FORMAT: Start with 🚨. Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. "
+                "State each fact exactly once — no redundant repetition of names or information. "
                 "Respond ONLY with the rewritten tweet."
             )
             attempt2 = self._chat(self.ENGLISH_REWRITE_SYSTEM, strict_prompt)
             if attempt2:
                 attempt2 = self._restore_terms(attempt2, protected_mapping)
                 attempt2 = self._apply_post_corrections(attempt2)
-                fact_error2 = self._facts_check(attempt2, cleaned)
-                if not fact_error2 and not self._detect_plagiarism(cleaned, attempt2):
+                fact_error2 = self._facts_check(attempt2, cleaned, source_mention)
+                name_error2 = self._validate_names(attempt2, cleaned, vision_context, source_mention, source_username)
+                if not fact_error2 and not name_error2 and not self._detect_plagiarism(cleaned, attempt2):
                     return attempt2
                 logger.warning("Second attempt also failed checks, using first attempt")
 
@@ -367,54 +577,271 @@ class TweetRewriter:
             final_text = attempt2
         
         # Ensure length compliance with retries
-        final_text = self._enforce_length_limit(final_text, protected_source, vision_prompt, protected_mapping)
+        final_text = self._enforce_length_limit(
+            final_text, protected_source, vision_prompt, protected_mapping, 
+            cleaned, vision_context, required_names_str,
+            source_mention=source_mention, source_username=source_username
+        )
+        
+        # Normalize output format (guarantees 🚨, \n\n sections, 🔵🔴 [@source] suffix)
+        final_text = self._normalize_output_format(final_text, source_username, source_mention)
+        
+        # Check length after normalization (normalization shouldn't add much, but verify)
+        from .timeutil import weighted_length
+        if weighted_length(final_text) > self.max_chars:
+            logger.warning(f"Text too long after format normalization ({weighted_length(final_text)} chars), attempting to fix")
+            # Try to truncate while preserving format
+            final_text = self._enforce_length_limit(
+                final_text, protected_source, vision_prompt, protected_mapping,
+                cleaned, vision_context, required_names_str,
+                source_mention=source_mention, source_username=source_username
+            )
+            final_text = self._normalize_output_format(final_text, source_username, source_mention)
+            if weighted_length(final_text) > self.max_chars:
+                logger.error(f"Text still too long after normalization fix ({weighted_length(final_text)} chars)")
+                return ""
+        
+        # Final name validation after length enforcement and normalization
+        final_name_error = self._validate_names(final_text, cleaned, vision_context, source_mention, source_username)
+        if final_name_error:
+            logger.warning(f"Final name validation failed: {final_name_error}")
+            # Try to fix by adding missing names
+            fixed_text = self._fix_missing_names(final_text, cleaned, vision_context)
+            if fixed_text and fixed_text != final_text:
+                fixed_text = self._normalize_output_format(fixed_text, source_username, source_mention)
+                fixed_error = self._validate_names(fixed_text, cleaned, vision_context, source_mention, source_username)
+                if not fixed_error:
+                    logger.info("Fixed missing names in rewrite")
+                    return fixed_text
+            # Fall back to attempt1 if it was valid
+            if not name_error and attempt1:
+                attempt1_norm = self._normalize_output_format(attempt1, source_username, source_mention)
+                if weighted_length(attempt1_norm) <= self.max_chars:
+                    return attempt1_norm
+            return ""
+        
+        # Check for non-English text (Chinese, Arabic, etc.)
+        if not self._is_english_only(final_text):
+            logger.warning("Rewrite contains non-English characters, rejecting")
+            # Fall back to attempt1 if it was valid and English-only, with length enforcement
+            if not name_error and attempt1 and self._is_english_only(attempt1):
+                attempt1_norm = self._normalize_output_format(
+                    self._enforce_length_limit(
+                        attempt1, protected_source, vision_prompt, protected_mapping,
+                        cleaned, vision_context, required_names_str,
+                        source_mention=source_mention, source_username=source_username
+                    ),
+                    source_username,
+                    source_mention
+                )
+                if weighted_length(attempt1_norm) <= self.max_chars:
+                    return attempt1_norm
+            return ""
         
         return final_text
 
-    def _enforce_length_limit(self, text: str, protected_source: str, vision_prompt: str, protected_mapping: Dict) -> str:
-        """Enforce 280-char limit with retries and smart truncation."""
+    def _enforce_length_limit(
+        self, 
+        text: str, 
+        protected_source: str, 
+        vision_prompt: str, 
+        protected_mapping: Dict, 
+        cleaned: str = "", 
+        vision_context: Optional[Dict] = None, 
+        required_names_str: str = "", 
+        source_mention: Optional[str] = None, 
+        source_username: str = "source",
+        required_names: Optional[List[str]] = None
+    ) -> str:
+        """Garantit le respect des 280 caractères avec préservation de la source exclusive."""
         from .timeutil import weighted_length
-        
         max_chars = self.max_chars
-        
-        # If already within limit, return as-is
+
         if weighted_length(text) <= max_chars:
             return text
+
+        logger.warning(f"Tweet trop long ({weighted_length(text)} chars), retentative concise...")
         
-        # Try once more with explicit "CONCISE" instruction
-        logger.warning(f"Tweet too long ({weighted_length(text)} chars), retrying with concise instruction...")
-        
-        concise_prompt = (
-            f"Source: {protected_source}"
-            f"{vision_prompt}\n\n"
-            "REWRITE IN NATURAL ENGLISH. **MUST BE UNDER 280 CHARACTERS TOTAL.** "
-            "Be extremely concise. Use short sentences. No fluff. "
-            "Respond ONLY with the rewritten tweet."
-        )
-        
+        # Prompt adapte selon la présence d'une source
+        if source_mention:
+            concise_prompt = (
+                f"Source: {protected_source}"
+                f"{vision_prompt}\n\n"
+                f"REQUIRED NAMES: {required_names_str}\n\n"
+                "REWRITE IN NATURAL ENGLISH. MUST BE UNDER 280 CHARACTERS TOTAL.\n"
+                "Structure: Headline starting with 🚨, body paragraph, ending with 🔵🔴 [@source].\n"
+                "State each fact exactly ONCE. Do not repeat names or sentences.\n"
+                "Respond ONLY with the rewritten tweet."
+            )
+        else:
+            concise_prompt = (
+                f"Source: {protected_source}"
+                f"{vision_prompt}\n\n"
+                f"REQUIRED NAMES: {required_names_str}\n\n"
+                "REWRITE IN NATURAL ENGLISH. MUST BE UNDER 280 CHARACTERS TOTAL.\n"
+                "Structure: Headline starting with 🚨, body paragraph, ending with 🔵🔴.\n"
+                "State each fact exactly ONCE. Do not repeat names or sentences.\n"
+                "Respond ONLY with the rewritten tweet."
+            )
+
         attempt3 = self._chat(self.ENGLISH_REWRITE_SYSTEM, concise_prompt)
         if attempt3:
             attempt3 = self._restore_terms(attempt3, protected_mapping)
             attempt3 = self._apply_post_corrections(attempt3)
-            if weighted_length(attempt3) <= max_chars:
-                return attempt3
+            attempt3_norm = self._normalize_output_format(attempt3, source_username, source_mention)
+            if weighted_length(attempt3_norm) <= max_chars:
+                name_err = self._validate_names(attempt3_norm, cleaned, vision_context, source_mention, source_username)
+                if not name_err:
+                    return attempt3_norm
+
+        # Always add suffix (with source_mention or just 🔵🔴)
+        if source_mention:
+            handles = [h for h in re.findall(r'@?(\w+)', source_mention) if h.lower() != 'via']
+            sources_str = " ".join([f"[@{h}]" for h in handles]) if handles else ""
+            source_suffix = f"🔵🔴\n{sources_str}" if sources_str else "🔵🔴"
+        else:
+            source_suffix = "🔵🔴"
+
+        suffix_len = weighted_length(source_suffix)
+        available_len = max_chars - suffix_len
+
+        if available_len < 30:
+            return ""
+
+        truncated = text[:available_len]
+        last_para = truncated.rfind('\n\n')
+        last_sentence = max(truncated.rfind('. '), truncated.rfind('! '), truncated.rfind('? '))
+
+        if last_para > available_len * 0.4:
+            body_part = truncated[:last_para].rstrip()
+        elif last_sentence > available_len * 0.4:
+            body_part = truncated[:last_sentence + 1].rstrip()
+        else:
+            body_part = truncated.rsplit(' ', 1)[0].rstrip() + "..."
+
+        return body_part + source_suffix
+
+    def _normalize_output_format(self, text: str, source_username: str, source_mention: Optional[str] = None) -> str:
+        if not text:
+            return text
+
+        # Normalisation des sauts de ligne
+        text = re.sub(r'\r\n', '\n', text)
+        text = re.sub(r'\n{3,}', '\n\n', text).strip()
+
+        # Détection des mots-clés d'urgence
+        keywords_pattern = r'^(🚨\s*)?(JUST IN|BREAKING|OFFICIAL|OFFICIEL|URGENT)[\s:]*'
+        match = re.match(keywords_pattern, text, flags=re.IGNORECASE)
         
-        # Final fallback: smart truncation at word boundary
-        if weighted_length(text) > max_chars:
-            # Try to truncate at last complete sentence
-            truncated = text[:max_chars]
-            last_period = truncated.rfind('.')
-            last_exclamation = truncated.rfind('!')
-            last_question = truncated.rfind('?')
-            last_break = max(last_period, last_exclamation, last_question)
+        if match:
+            kw = match.group(2).upper()
+            if kw == "OFFICIEL":
+                kw = "OFFICIAL"
+            text_without_kw = text[match.end():].strip()
+            text = f"🚨 {kw}: {text_without_kw}"
+        elif not text.startswith('🚨'):
+            text = '🚨 ' + text
+
+        # Suppression de toute attribution/suffixe en fin de texte existant
+        text = re.sub(r'\s*🔵🔴(\s*\n?\s*(\[@\w+\]\s*)+)?\s*$', '', text).rstrip()
+        text = re.sub(r'\s*(\[@\w+\]\s*)+$', '', text).rstrip()
+
+        # Construction du suffixe pour 1 ou plusieurs sources
+        if source_mention:
+            # Nettoyage des mentions dans le corps
+            text = re.sub(rf'\s*\[?@{re.escape(source_mention)}\]?\s*', ' ', text, flags=re.IGNORECASE)
+            text = re.sub(r' +', ' ', text).strip()
             
-            if last_break > max_chars * 0.7:  # If we have a good sentence break
-                return text[:last_break + 1]
+            # Extrait tous les handles (handles séparés par 'via', espace, virgule, etc.)
+            handles = [h for h in re.findall(r'@?(\w+)', source_mention) if h.lower() != 'via']
             
-            # Otherwise truncate at last space
-            return truncated.rsplit(' ', 1)[0] + "…"
-        
+            if handles:
+                sources_str = " ".join([f"[@{h}]" for h in handles])
+                expected_suffix = f"🔵🔴\n{sources_str}"
+            else:
+                expected_suffix = "🔵🔴"
+        else:
+            expected_suffix = "🔵🔴"
+
+        text = text.rstrip() + expected_suffix
+
+        return re.sub(r'[ \t]+\n', '\n', text)
+
+    def _reapply_suffix_format(self, text: str, source_username: str) -> str:
+        """Re-apply suffix format after duplicate removal may have altered it."""
+        expected_suffix = f'🔵🔴 [@{source_username}]'
+        # Remove any trailing attribution for the monitored account only
+        text = re.sub(rf'\s*🔵🔴\s*\[@{re.escape(source_username)}\]\s*$', '', text).rstrip()
+        text = re.sub(rf'\s*\[@{re.escape(source_username)}\]\s*$', '', text).rstrip()
+        # Ensure proper separation before suffix
+        if not text.endswith('\n\n'):
+            text = text + '\n\n'
+        # Add correct suffix (without rstrip which would remove the \n\n)
+        if not text.endswith(expected_suffix):
+            text = text + expected_suffix
         return text
+
+    def _remove_duplicate_facts(self, text: str, required_names: List[str]) -> str:
+        """Remove duplicate facts/sentences while preserving all required names.
+        
+        Splits text into paragraphs, compares factual content, and removes
+        redundant paragraphs that don't add new information.
+        """
+        if not text or '\n\n' not in text:
+            return text
+        
+        # Split into paragraphs
+        paragraphs = text.split('\n\n')
+        if len(paragraphs) <= 1:
+            return text
+        
+        # Extract key facts from each paragraph (names + verbs + key nouns)
+        def extract_facts(para: str) -> set:
+            # Find all words that look like names (capitalized) and key football terms
+            words = re.findall(r'\b[A-Z][a-z]+\b|\b(?:score|sign|win|loss|defeat|victory|goal|brace|hat-trick|injury|transfer|contract|deal|agree|extend|join|leave|move)\b', para, re.IGNORECASE)
+            # Also include required names if present
+            found_names = set()
+            para_lower = para.lower()
+            for name in required_names:
+                if name.lower() in para_lower:
+                    found_names.add(name.lower())
+            return set(w.lower() for w in words) | found_names
+        
+        para_facts = [extract_facts(p) for p in paragraphs]
+        
+        # Keep paragraphs that add new facts
+        kept_paragraphs = []
+        seen_facts = set()
+        
+        for i, (para, facts) in enumerate(zip(paragraphs, para_facts)):
+            # Always keep the first paragraph (headline)
+            if i == 0:
+                kept_paragraphs.append(para)
+                seen_facts.update(facts)
+                continue
+            
+            # For subsequent paragraphs, check if they add new facts
+            new_facts = facts - seen_facts
+            # A paragraph adds value if it has at least 2 new factual words or introduces a new required name
+            new_names = new_facts & {n.lower() for n in required_names}
+            
+            if len(new_facts) >= 2 or new_names:
+                kept_paragraphs.append(para)
+                seen_facts.update(facts)
+            else:
+                logger.debug(f"Removed duplicate paragraph: {para[:80]}...")
+        
+        # Ensure all required names still appear in the result
+        result = '\n\n'.join(kept_paragraphs)
+        result_lower = result.lower()
+        missing_names = [n for n in required_names if n.lower() not in result_lower]
+        
+        if missing_names:
+            # If removing duplicates caused name loss, fall back to original
+            logger.warning(f"Duplicate removal caused missing names: {missing_names}, reverting")
+            return text
+        
+        return result
 
     # System prompt for @UniverseCule
     ENGLISH_REWRITE_SYSTEM = """You are @UniverseCule, a professional football journalist specializing in FC Barcelona content.
@@ -423,22 +850,39 @@ Your task: Rewrite tweets in natural, idiomatic English while ensuring 100% orig
 ABSOLUTE RULES:
 1. NEVER copy-paste any part of the original text. Always rephrase using completely different word choices and sentence structure.
 2. Preserve ALL facts, names, numbers, and specific details exactly as in the source.
-3. Use precise and professional football terminology in English.
-4. Maximum 280 characters. No links, mentions, hashtags, or any external references.
-5. Format: Headline in UPPERCASE, emojis for emphasis, line breaks for readability.
-6. Never mix languages. Always use English exclusively.
-7. Maintain the original meaning and tone while making it sound natural and professional.
-8. NEVER modify protected terms (they appear as __PROTECTED_X__ - leave them exactly as-is).
+3. YOU MUST INCLUDE EVERY player name and staff name from the source text in your rewrite. Do not omit any.
+4. NEVER ADD player names, staff names, or any proper nouns that are NOT explicitly mentioned in the source text or vision context.
+5. Use precise and professional football terminology in English.
+6. **MAXIMUM 280 CHARACTERS TOTAL - THIS IS HARD LIMIT.** No links, hashtags, or any external references.
+7. **FORMAT REQUIREMENTS:**
+   - **Headline MUST start with 🚨** for breaking/urgent news - NO EXCEPTIONS
+   - **Preserve alert keywords:** If source contains JUST IN, BREAKING, OFFICIAL, URGENT (or French OFFICIEL), keep the keyword in uppercase immediately after 🚨 (e.g., "🚨 JUST IN:", "🚨 BREAKING:", "🚨 OFFICIAL:")
+   - Convert French "OFFICIEL" to English "OFFICIAL"
+   - **Use line breaks (\\n\\n) between logical sections for readability - MANDATORY**
+   - **Tweet MUST end with 🔵🔴 [@source_mention]** if source_mention exists, otherwise end with **🔵🔴** (always present, directly attached)
+   - **NO duplicate/redundant sentences** - each fact stated exactly once
+   - No text after the emoji suffix
+8. Never mix languages. Always use English exclusively.
+9. Maintain the original meaning and tone while making it sound natural and professional.
+10. NEVER modify protected terms (they appear as __PROTECTED_X__ - leave them exactly as-is).
+11. Proper nouns (names, places, competitions) keep their standard capitalization.
+12. **Sentence case only - NO UPPERCASE words (except preserved alert keywords).**
 
 EXAMPLES:
-- Original: "Barcelona sign new striker"
-  Rewritten: "FC BARCELONA SECURE NEW FORWARD ✍️\n\nThe club has finalized the acquisition of a promising attacker to bolster their front line."
+- Original: "JUST IN: Barcelona sign new striker"
+  Rewritten: "🚨 JUST IN: FC Barcelona secure new forward ✍️\n\nThe club has finalized the acquisition of a promising attacker to bolster their front line.🔵🔴 [@source]"
 
-- Original: "Real Madrid 3-0 victory over Barcelona"
-  Rewritten: "REAL MADRID DOMINATE 3-0 IN EL CLASICO ⚪\n\nLos Blancos deliver a commanding performance to claim bragging rights in Madrid."
+- Original: "BREAKING: Real Madrid 3-0 victory over Barcelona"
+  Rewritten: "🚨 BREAKING: Real Madrid dominate 3-0 in El Clasico ⚪\n\nLos Blancos deliver a commanding performance to claim bragging rights in Madrid.🔵🔴 [@source]"
 
-- Original: "Lewandowski scores 2 goals"
-  Rewritten: "LEWANDOWSKI BRACE FIRES BARCELONA TO VICTORY ⚽⚽\n\nThe Polish striker nets twice as the Blaugrana secure three vital points."
+- Original: "OFFICIEL: Lewandowski scores 2 goals"
+  Rewritten: "🚨 OFFICIAL: Lewandowski brace fires Barcelona to victory ⚽⚽\n\nThe Polish striker nets twice as the Blaugrana secure three vital points.🔵🔴 [@source]"
+
+- Original: "Pedri, Gavi et De Jong dominent le milieu de terrain"
+  Rewritten: "🚨 Pedri, Gavi and De Jong control midfield\n\nThe trio dictates play as Barcelona secure possession dominance.🔵🔴"
+
+- Original: "Team rebounds after losses. Meeting went well. Errors acknowledged."
+  Rewritten: "🚨 FC Barcelona aims to bounce back after two defeats.\n\nThe atmosphere improved after yesterday's meeting. Players acknowledged mistakes.\n\nTheir belief: we can win everything with the best squad.🔵🔴"
 
 FOOTBALL TERMINOLOGY:
 - Use "forward" or "attacker" not "striker"
@@ -453,12 +897,16 @@ PROTECTED TERMS (appear as __PROTECTED_X__ - DO NOT MODIFY):
 These include: player names (Yamal, Pedri, Lewandowski, etc.), trophy names (Ballon d'Or, Kopa Trophy), alert words (BREAKING, JUST IN, OFFICIAL, EXCLUSIVE), club names (FC Barcelona, Barça, Blaugrana), competitions (La Liga, Champions League, El Clasico).
 
 EMOJI GUIDELINES:
-- Use 🚨 for breaking/urgent news
-- Use ⚽ for goals/match action
-- Use ✍️ for signings/transfers
-- Use 🏆 for trophies/titles
-- Use 🔵🔴 for Barcelona branding (blue/red)
-- Keep emojis minimal and professional"""
+- **Headline MUST start with 🚨** for breaking/urgent news
+- **Preserve alert keywords** (JUST IN, BREAKING, OFFICIAL, URGENT) immediately after 🚨
+- **Tweet MUST end with 🔵🔴 [@source_mention]** if source_mention exists, otherwise end with **🔵🔴** (always present, directly attached)
+- Use ⚽ for goals/match action (in headline or body)
+- Use ✍️ for signings/transfers (in headline or body)
+- Use 🏆 for trophies/titles (in headline or body)
+- Keep emojis minimal and professional - max 3 per tweet
+- **NO emojis after the 🔵🔴 suffix**
+
+CRITICAL: Count characters before responding. If over 280, shorten aggressively. The source attribution [@source] at the end is ONLY added if source_mention exists. Line breaks (\\n\\n) between sections are mandatory. Headline MUST start with 🚨. No duplicate sentences."""
 
     def rewrite(self, text: str, source_username: str = "source", 
                  language: str = "en", vision_context: Optional[Dict] = None) -> RewriteResult:
@@ -484,12 +932,12 @@ EMOJI GUIDELINES:
                 # Arabic → English translation
                 translated = self._translate_arabic_to_english(cleaned)
                 if translated:
-                    rewritten = self._rewrite_to_english(translated, "ar", vision_context)
+                    rewritten = self._rewrite_to_english(translated, "ar", vision_context, source_username)
                 else:
                     rewritten = cleaned  # Fallback to original if translation fails
             else:
                 # English/Spanish/French → English reformulation
-                rewritten = self._rewrite_to_english(cleaned, "en", vision_context)
+                rewritten = self._rewrite_to_english(cleaned, "en", vision_context, source_username)
             
             if not rewritten:
                 return RewriteResult(success=False, error="Rewrite produced empty result")
