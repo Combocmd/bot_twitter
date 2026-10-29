@@ -33,6 +33,7 @@ sources:
     - "BarcaUniversal"
     - "Barca_buzz"
     - "barcacentre"
+    - "ManagingBarca"
     - "FCBarcelona"
     - "FabrizioRomano"
     - "_BarcaInfo"
