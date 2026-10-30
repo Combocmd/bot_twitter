@@ -20,6 +20,9 @@ requests>=2.31.0
 # LLM Local (Ollama)
 ollama>=0.1.7
 
+# LLM API (Gemini)
+google-genai>=1.0.0
+
 # Web scraping (for free Twitter monitoring)
 playwright>=1.40.0
 feedparser>=6.0.10

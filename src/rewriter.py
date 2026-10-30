@@ -1,5 +1,6 @@
 """English rewrite engine with anti-plagiarism, fact-checking, and protected terms for @UniverseCule."""
 
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -8,6 +9,16 @@ import ollama
 from loguru import logger
 from .config import get_config
 from .timeutil import clean_tweet_text, weighted_length
+
+# Optional Gemini import (new google-genai SDK)
+try:
+    from google import genai
+    from google.genai import types
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    genai = None
+    types = None
 
 
 @dataclass
@@ -154,6 +165,24 @@ class TweetRewriter:
         self.model = self.config.ollama.model
         self.max_chars = int(self.config.length.max_chars)
         self.temperature = float(self.config.ollama.temperature)
+        
+        # Gemini setup (priority provider)
+        self._gemini_available = GEMINI_AVAILABLE
+        self._gemini_client = None
+        self._gemini_model = "gemini-flash-lite-latest"
+        if self._gemini_available:
+            api_key = os.getenv("GEMINI_API_KEY")
+            if api_key:
+                try:
+                    self._gemini_client = genai.Client(api_key=api_key)
+                    logger.info("Gemini client initialized successfully")
+                except Exception as e:
+                    logger.warning(f"Failed to initialize Gemini client: {e}")
+                    self._gemini_available = False
+            else:
+                logger.warning("GEMINI_API_KEY not found in environment, Gemini unavailable")
+                self._gemini_available = False
+        
         # Cache for Arabic translation model
         self._ar_tokenizer = None
         self._ar_model = None
@@ -171,6 +200,85 @@ class TweetRewriter:
         except Exception as e:
             logger.warning(f"Ollama error: {e}")
             return ""
+
+    def _call_gemini_llm(self, system: str, user: str) -> str:
+        """Call Gemini API with the given system and user prompts using new google-genai SDK.
+        
+        Includes 2 retries for 503 (High Demand) errors before falling back to Ollama.
+        """
+        if not self._gemini_available or not self._gemini_client:
+            logger.debug("Gemini not available, skipping")
+            return ""
+        
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                # Combine system and user prompts for Gemini
+                full_prompt = f"{system}\n\n{user}"
+                
+                response = self._gemini_client.models.generate_content(
+                    model=self._gemini_model,
+                    contents=full_prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=self.temperature,
+                        max_output_tokens=220,
+                    )
+                )
+                
+                if response.text:
+                    result = response.text.strip()
+                    logger.debug(f"Gemini call succeeded on attempt {attempt + 1}")
+                    return result
+                else:
+                    logger.warning(f"Gemini returned empty response on attempt {attempt + 1}")
+                    
+            except Exception as e:
+                error_msg = str(e)
+                logger.warning(f"Gemini error (attempt {attempt + 1}/{max_retries + 1}): {error_msg}")
+                
+                # Check for 503 (High Demand) - retry
+                if "503" in error_msg or "UNAVAILABLE" in error_msg.upper() or "HIGH DEMAND" in error_msg.upper():
+                    if attempt < max_retries:
+                        import time
+                        time.sleep(1.5 * (attempt + 1))  # Exponential backoff
+                        continue
+                
+                # For other errors, don't retry
+                break
+        
+        logger.warning("Gemini failed after retries, will fall back to Ollama")
+        return ""
+
+    def _llm_generate(self, system: str, user: str, context: str = "") -> str:
+        """Generate text using Gemini (priority) with Ollama fallback.
+        
+        Args:
+            system: System prompt
+            user: User prompt
+            context: Optional context string for logging (e.g., "first attempt", "strict retry", "concise retry")
+            
+        Returns:
+            Generated text, or empty string if both providers fail.
+        """
+        # Try Gemini first
+        if self._gemini_available and self._gemini_client:
+            logger.debug(f"Attempting Gemini generation ({context})")
+            result = self._call_gemini_llm(system, user)
+            if result:
+                logger.info(f"Gemini succeeded ({context})")
+                return result
+            logger.warning(f"Gemini returned empty, falling back to Ollama ({context})")
+        else:
+            logger.debug(f"Gemini unavailable, using Ollama directly ({context})")
+        
+        # Fallback to Ollama
+        logger.debug(f"Attempting Ollama generation ({context})")
+        result = self._chat(system, user)
+        if result:
+            logger.info(f"Ollama succeeded ({context})")
+        else:
+            logger.warning(f"Ollama also failed ({context})")
+        return result
 
     def _sanitize(self, text: str) -> tuple[str, Optional[str]]:
         """Ultra-fast text sanitization. Returns (cleaned_text, source_mention)."""
@@ -228,6 +336,25 @@ class TweetRewriter:
             if placeholder in text:
                 return f"protected term not restored: {placeholder}"
         return None
+
+    def _extract_alert_keyword(self, text: str) -> tuple[str, str]:
+        """Extract alert keyword from the beginning of text.
+        
+        Detects: JUST IN, BREAKING, OFFICIAL, OFFICIEL, URGENT (with or without 🚨 prefix).
+        Returns: (cleaned_text, alert_keyword) where alert_keyword is empty if none found.
+        """
+        # Pattern: optional 🚨 followed by alert keyword at start
+        keywords = ["JUST IN", "BREAKING", "OFFICIAL", "OFFICIEL", "URGENT"]
+        pattern = r'^(?:🚨\s*)?(' + '|'.join(keywords) + r')[\s:]+'
+        match = re.match(pattern, text, flags=re.IGNORECASE)
+        if match:
+            kw = match.group(1).upper()
+            # Normalize OFFICIEL to OFFICIAL
+            if kw == "OFFICIEL":
+                kw = "OFFICIAL"
+            cleaned = text[match.end():].strip()
+            return cleaned, kw
+        return text, ""
 
     def _extract_numbers(self, text: str) -> Set[str]:
         """Extract all numbers from text."""
@@ -292,13 +419,14 @@ class TweetRewriter:
         if missing:
             return f"missing source names in rewrite: {', '.join(sorted(missing))}"
         
-        # Check for missing source mention (always validate source_username attribution)
-        expected_source = f"[@{source_username}]"
-        if expected_source not in rewritten:
-            return f"missing source mention in rewrite: {expected_source}"
+        # Check for missing source mention (only if source_username is provided)
+        if source_username and source_username.strip():
+            expected_source = f"[@{source_username}]"
+            if expected_source not in rewritten:
+                return f"missing source mention in rewrite: {expected_source}"
         
         # Check for missing source_mention (if tweet cites a different source)
-        if source_mention and source_mention.lower() != source_username.lower():
+        if source_mention and source_mention.strip() and source_mention.lower() != source_username.lower():
             expected_mention = f"[@{source_mention}]"
             if expected_mention not in rewritten:
                 return f"missing source mention in rewrite: {expected_mention}"
@@ -456,6 +584,9 @@ class TweetRewriter:
         if not cleaned:
             return ""
 
+        # Extract alert keyword from the beginning of the text
+        cleaned, alert_keyword = self._extract_alert_keyword(cleaned)
+
         # Build vision context string for prompt
         vision_prompt = ""
         required_names = []
@@ -481,8 +612,10 @@ class TweetRewriter:
         # Attribution logic: source_mention takes priority for suffix
         # If source_mention exists, it will be the suffix; source_username is NOT added to required_names
         # If source_mention is None, source_username is used as suffix (for Barça/mercato tweets)
+        # Only add attribution source if one is actually provided
         attribution_source = source_mention if source_mention else source_username
-        required_names.append(f"[@{attribution_source}]")
+        if attribution_source and attribution_source.strip():
+            required_names.append(f"[@{attribution_source}]")
 
         source_names = self._extract_names(cleaned)
         for name in source_names:
@@ -508,17 +641,20 @@ class TweetRewriter:
             f"Original tweet: {protected_source}"
             f"{vision_prompt}\n\n"
             f"REQUIRED NAMES (must ALL appear in rewrite): {required_names_str}\n\n"
+            f"ALERT KEYWORD (must appear immediately after 🚨 in headline): {alert_keyword if alert_keyword else 'none'}\n\n"
             "Rewrite this tweet in natural English, avoiding plagiarism. "
             "Only use vision context for player names or text visible in media. "
             "Do NOT add scene descriptions or inferred details not in the source text. "
             "CRITICAL: Every name in REQUIRED NAMES must appear in your output. Do not omit any. "
             "FORMAT: Start with 🚨. Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. "
             "State each fact exactly once — no redundant repetition of names or information. "
+            "IMPORTANT: The ALERT KEYWORD (if provided) must ONLY appear immediately after 🚨 in the headline. "
+            "NEVER use alert keywords (JUST IN, BREAKING, OFFICIAL, URGENT) anywhere else in the tweet body. "
             "Follow the rules above. Respond ONLY with the rewritten tweet."
         )
 
         # Get first attempt
-        attempt1 = self._chat(self.ENGLISH_REWRITE_SYSTEM, prompt)
+        attempt1 = self._llm_generate(self.ENGLISH_REWRITE_SYSTEM, prompt, "first attempt")
         if not attempt1:
             return ""
 
@@ -559,7 +695,7 @@ class TweetRewriter:
                 "State each fact exactly once — no redundant repetition of names or information. "
                 "Respond ONLY with the rewritten tweet."
             )
-            attempt2 = self._chat(self.ENGLISH_REWRITE_SYSTEM, strict_prompt)
+            attempt2 = self._llm_generate(self.ENGLISH_REWRITE_SYSTEM, strict_prompt, "strict retry")
             if attempt2:
                 attempt2 = self._restore_terms(attempt2, protected_mapping)
                 attempt2 = self._apply_post_corrections(attempt2)
@@ -684,7 +820,7 @@ class TweetRewriter:
                 "Respond ONLY with the rewritten tweet."
             )
 
-        attempt3 = self._chat(self.ENGLISH_REWRITE_SYSTEM, concise_prompt)
+        attempt3 = self._llm_generate(self.ENGLISH_REWRITE_SYSTEM, concise_prompt, "concise retry")
         if attempt3:
             attempt3 = self._restore_terms(attempt3, protected_mapping)
             attempt3 = self._apply_post_corrections(attempt3)

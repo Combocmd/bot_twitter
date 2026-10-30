@@ -1,4 +1,4 @@
-"""Vision analysis for images and videos using Ollama local models.
+"""Vision analysis for images and videos using Gemini Vision API (primary) and Ollama local models (fallback).
 
 Supports:
 - Image analysis: player recognition, text extraction, scene description
@@ -22,6 +22,16 @@ from loguru import logger
 
 from .config import get_config
 from .twitter_client import TwitterClient
+
+# Optional Gemini import (new google-genai SDK)
+try:
+    from google import genai
+    from google.genai import types
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    genai = None
+    types = None
 
 
 @dataclass
@@ -87,6 +97,25 @@ class VisionAnalyzer:
         self._model_name: Optional[str] = None
         self._model_lock = threading.Lock()
         self._ffmpeg_available = self._check_ffmpeg()
+        
+        # Gemini Vision API configuration (primary - new google-genai SDK)
+        self._gemini_client = None
+        self._gemini_available = False
+        if GEMINI_AVAILABLE:
+            gemini_api_key = os.getenv("GEMINI_API_KEY")
+            if gemini_api_key:
+                try:
+                    # New google-genai SDK: initialize client (default v1 API)
+                    self._gemini_client = genai.Client(api_key=gemini_api_key)
+                    self._gemini_model = "gemini-flash-lite-latest"
+                    self._gemini_available = True
+                    logger.info("Gemini Vision API configured successfully (primary enabled) - using google-genai SDK with gemini-flash-lite-latest")
+                except Exception as e:
+                    logger.warning(f"Failed to configure Gemini Vision API: {e}")
+            else:
+                logger.info("GEMINI_API_KEY not set, running Ollama-only mode for vision")
+        else:
+            logger.info("google-genai not installed, running Ollama-only mode for vision")
 
     def _check_ffmpeg(self) -> bool:
         """Check if ffmpeg is available for video frame extraction."""
@@ -226,7 +255,59 @@ class VisionAnalyzer:
             logger.warning(f"Image resize failed, using original: {e}")
             return image_content
 
-    def _analyze_image(self, image_content: bytes, prompt: str) -> str:
+    def _analyze_image_gemini(self, image_content: bytes, prompt: str) -> str:
+        """Analyze a single image with Gemini Vision API using new google-genai SDK."""
+        if not self._gemini_available or not self._gemini_client:
+            logger.debug("Gemini Vision not available")
+            return ""
+        
+        try:
+            import base64
+            import io
+            from PIL import Image
+            
+            # Resize image for faster processing
+            resized_content = self._resize_image_for_vision(image_content)
+            
+            # Convert to PIL Image for google-genai SDK
+            img = Image.open(io.BytesIO(resized_content))
+            
+            # Optimized config from config
+            temperature = getattr(self.vision_config, 'temperature', 0.1)
+            num_predict = getattr(self.vision_config, 'num_predict', 200)
+            
+            # Use model name directly as string literal to avoid interpolation issues
+            response = self._gemini_client.models.generate_content(
+                model="gemini-flash-lite-latest",
+                contents=[prompt, img],
+                config=types.GenerateContentConfig(
+                    temperature=temperature,
+                    max_output_tokens=num_predict,
+                ),
+            )
+            
+            if response and response.text:
+                result = response.text.strip()
+                logger.debug("Gemini Vision analysis succeeded")
+                return result
+            else:
+                logger.warning("Gemini Vision returned empty response")
+                return ""
+                
+        except Exception as e:
+            # Check for HTTP 503 (High Demand / Server Error) and other server errors
+            error_msg = str(e)
+            if "503" in error_msg or "High Demand" in error_msg or "Server Error" in error_msg:
+                logger.warning(f"Gemini Vision API server error (503/High Demand), will fallback to Ollama: {e}")
+            elif "429" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower():
+                logger.warning(f"Gemini Vision API rate limit/quota exceeded, will fallback to Ollama: {e}")
+            elif "404" in error_msg or "not found" in error_msg.lower():
+                logger.warning(f"Gemini Vision model not found, will fallback to Ollama: {e}")
+            else:
+                logger.warning(f"Gemini Vision API error, will fallback to Ollama: {e}")
+            return ""
+
+    def _analyze_image_ollama(self, image_content: bytes, prompt: str) -> str:
         """Analyze a single image with Ollama vision model - optimized for speed."""
         model = self._get_model()
         try:
@@ -257,8 +338,24 @@ class VisionAnalyzer:
             )
             return str(response.get("message", {}).get("content", "")).strip()
         except Exception as e:
-            logger.warning(f"Vision analysis failed: {e}")
+            logger.warning(f"Ollama vision analysis failed: {e}")
             return ""
+
+    def _analyze_image(self, image_content: bytes, prompt: str) -> str:
+        """Analyze a single image - tries Gemini Vision first (primary), then Ollama (fallback)."""
+        # Try Gemini Vision first (primary)
+        if self._gemini_available:
+            logger.debug("Attempting Gemini Vision analysis...")
+            result = self._analyze_image_gemini(image_content, prompt)
+            if result:
+                logger.debug("Gemini Vision analysis succeeded")
+                return result
+            logger.info("Gemini Vision failed/empty, falling back to Ollama...")
+        else:
+            logger.debug("Gemini Vision not available, using Ollama...")
+        
+        # Fallback to Ollama (secondary - local)
+        return self._analyze_image_ollama(image_content, prompt)
 
     def _build_analysis_prompt(self) -> str:
         """Build the prompt for vision analysis."""
