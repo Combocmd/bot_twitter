@@ -285,23 +285,50 @@ class TweetRewriter:
         text = clean_tweet_text(text)
         text = re.sub(r"https?://\S+", "", text)
         
-        # Extract source mention from end of tweet: (@user), [@user], via @user, etc.
+        # Extract source mention from various patterns in the tweet text
         source_mention = None
-        # Pattern for (@user), [@user], (@user) at end of text
-        source_pattern = re.compile(r'\s*[\(\[]\s*@(\w+)\s*[\)\]]\s*$')
-        match = source_pattern.search(text)
+        
+        # Pattern 1: "via @user" anywhere in text (case insensitive)
+        via_pattern = re.compile(r'\bvia\s+@(\w+)\b', re.IGNORECASE)
+        match = via_pattern.search(text)
         if match:
             source_mention = match.group(1)
-            text = text[:match.start()].rstrip()
-        else:
-            # Also check for "via @user" at end
-            via_pattern = re.compile(r'\s+via\s+@(\w+)\s*$', re.IGNORECASE)
-            match = via_pattern.search(text)
+            text = text[:match.start()] + text[match.end():]
+        
+        # Pattern 2: "source: @user", "according to @user", "per @user", "report: @user"
+        if not source_mention:
+            source_patterns = [
+                (r'\bsource\s*[:：]\s*@(\w+)\b', 'source'),
+                (r'\baccording\s+to\s+@(\w+)\b', 'according to'),
+                (r'\bper\s+@(\w+)\b', 'per'),
+                (r'\breport[s]?\s*[:：]\s*@(\w+)\b', 'report'),
+                (r'\bvia\s+@(\w+)\b', 'via'),
+            ]
+            for pattern_str, keyword in source_patterns:
+                pattern = re.compile(pattern_str, re.IGNORECASE)
+                match = pattern.search(text)
+                if match:
+                    source_mention = match.group(1)
+                    text = text[:match.start()] + text[match.end():]
+                    break
+        
+        # Pattern 3: (@user) or [@user] at end of text
+        if not source_mention:
+            end_paren_pattern = re.compile(r'\s*[\(\[]\s*@(\w+)\s*[\)\]]\s*$')
+            match = end_paren_pattern.search(text)
             if match:
                 source_mention = match.group(1)
                 text = text[:match.start()].rstrip()
         
-        # Remove any remaining mentions (not the source one we extracted)
+        # Pattern 4: "via @user" at end of text (original logic)
+        if not source_mention:
+            end_via_pattern = re.compile(r'\s+via\s+@(\w+)\s*$', re.IGNORECASE)
+            match = end_via_pattern.search(text)
+            if match:
+                source_mention = match.group(1)
+                text = text[:match.start()].rstrip()
+        
+        # Remove any remaining mentions and hashtags
         text = re.sub(r"(?<!\w)@\w+", "", text)
         text = re.sub(r"#\w+", "", text)
         text = re.sub(r"\s+", " ", text).strip()
@@ -428,20 +455,15 @@ class TweetRewriter:
         if missing:
             return f"missing source names in rewrite: {', '.join(sorted(missing))}"
         
-        # Check for missing source mention (only validate the handle that's actually used in suffix)
-        # Priority: source_mention > source_username
+        # Check for missing source mention (ONLY validate if source_mention exists)
+        # If NO source_mention, no handle should be in the tweet
         if source_mention and source_mention.strip():
             # source_mention is used in suffix
             expected_mention = f"[@{source_mention}]"
             if expected_mention not in rewritten:
                 return f"missing source mention in rewrite: {expected_mention}"
             allowed_names.add(expected_mention)
-        elif source_username and source_username.strip():
-            # source_username is used in suffix (when no source_mention)
-            expected_source = f"[@{source_username}]"
-            if expected_source not in rewritten:
-                return f"missing source mention in rewrite: {expected_source}"
-            allowed_names.add(expected_source)
+        # If no source_mention, no handle validation needed (suffix is just 🔵🔴)
         
         # Check for hallucinated names (NOT in source or vision)
         hallucinated = rewritten_names - allowed_names
@@ -619,11 +641,12 @@ class TweetRewriter:
         if vision_context and vision_context.get("players_detected"):
             required_names.extend(vision_context["players_detected"])
 
-        # Attribution logic: source_mention takes priority for suffix
-        # If source_mention exists, it will be the suffix; source_username is NOT added to required_names
-        # If source_mention is None, source_username is used as suffix (for Barça/mercato tweets)
-        # Only add attribution source if one is actually provided
-        attribution_source = source_mention if source_mention else source_username
+        # Attribution logic: ONLY use source_mention (explicit source cited in tweet text)
+        # If source_mention exists, it will be the suffix
+        # If NO source_mention, NO handle is added (just 🔵🔴)
+        # source_username (monitored account) is NEVER used as a source handle
+        # because aggregators are not sources - only explicitly cited sources are
+        attribution_source = source_mention
         if attribution_source and attribution_source.strip():
             required_names.append(f"[@{attribution_source}]")
 
@@ -901,7 +924,8 @@ class TweetRewriter:
         text = re.sub(r'\s*(\[@\w+\]\s*)+$', '', text).rstrip()
 
         # Construction du suffixe pour 1 ou plusieurs sources
-        # Priority: source_mention (extracted from tweet text) > source_username (monitored account)
+        # ONLY use source_mention (explicit source cited in tweet text)
+        # If NO source_mention, end with just 🔵🔴 (no handle)
         if source_mention:
             # Nettoyage des mentions dans le corps
             text = re.sub(rf'\s*\[?@{re.escape(source_mention)}\]?\s*', ' ', text, flags=re.IGNORECASE)
@@ -915,9 +939,6 @@ class TweetRewriter:
                 expected_suffix = f"🔵🔴\n{sources_str}"
             else:
                 expected_suffix = "🔵🔴"
-        elif source_username and source_username.strip():
-            # Use source_username (monitored account) when no source_mention in tweet
-            expected_suffix = f"🔵🔴\n[@{source_username}]"
         else:
             expected_suffix = "🔵🔴"
 
