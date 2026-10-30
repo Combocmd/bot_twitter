@@ -337,6 +337,15 @@ class TweetRewriter:
                 return f"protected term not restored: {placeholder}"
         return None
 
+    def _cleanup_protected_terms(self, text: str) -> str:
+        """Remove any remaining protected term placeholders as a safety net.
+        
+        Placeholders have the format __PROTECTED_X__ where X is a number.
+        This is a final safeguard in case restoration missed any.
+        """
+        # Match __PROTECTED_N__ where N is any number
+        return re.sub(r'__PROTECTED_\d+__', '', text)
+
     def _extract_alert_keyword(self, text: str) -> tuple[str, str]:
         """Extract alert keyword from the beginning of text.
         
@@ -419,19 +428,20 @@ class TweetRewriter:
         if missing:
             return f"missing source names in rewrite: {', '.join(sorted(missing))}"
         
-        # Check for missing source mention (only if source_username is provided)
-        if source_username and source_username.strip():
-            expected_source = f"[@{source_username}]"
-            if expected_source not in rewritten:
-                return f"missing source mention in rewrite: {expected_source}"
-        
-        # Check for missing source_mention (if tweet cites a different source)
-        if source_mention and source_mention.strip() and source_mention.lower() != source_username.lower():
+        # Check for missing source mention (only validate the handle that's actually used in suffix)
+        # Priority: source_mention > source_username
+        if source_mention and source_mention.strip():
+            # source_mention is used in suffix
             expected_mention = f"[@{source_mention}]"
             if expected_mention not in rewritten:
                 return f"missing source mention in rewrite: {expected_mention}"
-            # Also add to allowed names so it's not flagged as hallucinated
             allowed_names.add(expected_mention)
+        elif source_username and source_username.strip():
+            # source_username is used in suffix (when no source_mention)
+            expected_source = f"[@{source_username}]"
+            if expected_source not in rewritten:
+                return f"missing source mention in rewrite: {expected_source}"
+            allowed_names.add(expected_source)
         
         # Check for hallucinated names (NOT in source or vision)
         hallucinated = rewritten_names - allowed_names
@@ -642,6 +652,8 @@ class TweetRewriter:
             f"{vision_prompt}\n\n"
             f"REQUIRED NAMES (must ALL appear in rewrite): {required_names_str}\n\n"
             f"ALERT KEYWORD (must appear immediately after 🚨 in headline): {alert_keyword if alert_keyword else 'none'}\n\n"
+            f"SOURCE HANDLE: The final 🔵🔴 suffix MUST use the EXACT handle from REQUIRED NAMES. "
+            f"Do NOT invent or substitute any other handle (e.g., @_BarcaInfo, @FabrizioRomano).\n\n"
             "Rewrite this tweet in natural English, avoiding plagiarism. "
             "Only use vision context for player names or text visible in media. "
             "Do NOT add scene descriptions or inferred details not in the source text. "
@@ -685,6 +697,8 @@ class TweetRewriter:
                 f"Source: {protected_source}"
                 f"{vision_prompt}\n\n"
                 f"REQUIRED NAMES (must ALL appear in rewrite): {required_names_str}\n\n"
+                f"SOURCE HANDLE: The final 🔵🔴 suffix MUST use the EXACT handle from REQUIRED NAMES. "
+                f"Do NOT invent or substitute any other handle (e.g., @_BarcaInfo, @FabrizioRomano).\n\n"
                 "REWRITE THIS TWEET IN NATURAL ENGLISH WITHOUT COPYING ANY WORDS. "
                 "Change sentence structure, word order, and phrasing completely. "
                 "CRITICAL: Every name in REQUIRED NAMES must appear in your output. Do not omit any. "
@@ -804,6 +818,8 @@ class TweetRewriter:
                 f"Source: {protected_source}"
                 f"{vision_prompt}\n\n"
                 f"REQUIRED NAMES: {required_names_str}\n\n"
+                f"SOURCE HANDLE: The final 🔵🔴 suffix MUST use the EXACT handle from REQUIRED NAMES. "
+                f"Do NOT invent or substitute any other handle.\n\n"
                 "REWRITE IN NATURAL ENGLISH. MUST BE UNDER 280 CHARACTERS TOTAL.\n"
                 "Structure: Headline starting with 🚨, body paragraph, ending with 🔵🔴 [@source].\n"
                 "State each fact exactly ONCE. Do not repeat names or sentences.\n"
@@ -814,6 +830,8 @@ class TweetRewriter:
                 f"Source: {protected_source}"
                 f"{vision_prompt}\n\n"
                 f"REQUIRED NAMES: {required_names_str}\n\n"
+                f"SOURCE HANDLE: The final 🔵🔴 suffix MUST use the EXACT handle from REQUIRED NAMES. "
+                f"Do NOT invent or substitute any other handle.\n\n"
                 "REWRITE IN NATURAL ENGLISH. MUST BE UNDER 280 CHARACTERS TOTAL.\n"
                 "Structure: Headline starting with 🚨, body paragraph, ending with 🔵🔴.\n"
                 "State each fact exactly ONCE. Do not repeat names or sentences.\n"
@@ -883,6 +901,7 @@ class TweetRewriter:
         text = re.sub(r'\s*(\[@\w+\]\s*)+$', '', text).rstrip()
 
         # Construction du suffixe pour 1 ou plusieurs sources
+        # Priority: source_mention (extracted from tweet text) > source_username (monitored account)
         if source_mention:
             # Nettoyage des mentions dans le corps
             text = re.sub(rf'\s*\[?@{re.escape(source_mention)}\]?\s*', ' ', text, flags=re.IGNORECASE)
@@ -896,6 +915,9 @@ class TweetRewriter:
                 expected_suffix = f"🔵🔴\n{sources_str}"
             else:
                 expected_suffix = "🔵🔴"
+        elif source_username and source_username.strip():
+            # Use source_username (monitored account) when no source_mention in tweet
+            expected_suffix = f"🔵🔴\n[@{source_username}]"
         else:
             expected_suffix = "🔵🔴"
 
@@ -996,6 +1018,7 @@ ABSOLUTE RULES:
    - Convert French "OFFICIEL" to English "OFFICIAL"
    - **Use line breaks (\\n\\n) between logical sections for readability - MANDATORY**
    - **Tweet MUST end with 🔵🔴 [@source_mention]** if source_mention exists, otherwise end with **🔵🔴** (always present, directly attached)
+   - **SOURCE HANDLE RULE: The source handle in the final 🔵🔴 suffix MUST EXACTLY MATCH the handle provided in REQUIRED NAMES. NEVER invent, substitute, or modify the source handle. NEVER use handles like @_BarcaInfo, @FabrizioRomano, or any other aggregator unless explicitly provided as the source.**
    - **NO duplicate/redundant sentences** - each fact stated exactly once
    - No text after the emoji suffix
 8. Never mix languages. Always use English exclusively.
@@ -1077,6 +1100,9 @@ CRITICAL: Count characters before responding. If over 280, shorten aggressively.
             
             if not rewritten:
                 return RewriteResult(success=False, error="Rewrite produced empty result")
+            
+            # Final cleanup: remove any remaining protected term placeholders
+            rewritten = self._cleanup_protected_terms(rewritten)
             
             return RewriteResult(success=True, rewritten_text=rewritten)
         except Exception as e:
