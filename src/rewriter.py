@@ -151,10 +151,10 @@ class TweetRewriter:
         "Araujo", "Ronald Araujo", "Balde", "Alejandro Balde", "Ter Stegen",
         "Marc-Andre ter Stegen", "Fermin", "Fermin Lopez", "Olmo", "Dani Olmo",
         "Torres", "Ferran Torres", "Fati", "Ansu Fati", "Garcia", "Eric Garcia",
-        "Martinez", "Inigo Martinez", "Christensen", "Andreas Christensen",
-        "Pena", "Inaki Pena", "Szczesny", "Wojciech Szczesny", "Fort", "Hector Fort",
+        "Martinez", "Inigo Martinez", "Iñigo Martínez", "Christensen", "Andreas Christensen",
+        "Pena", "Inaki Pena", "Iñaki Peña", "Szczesny", "Wojciech Szczesny", "Fort", "Hector Fort", "Héctor Fort",
         "Casado", "Marc Casado", "Bernal", "Marc Bernal", "Torre", "Pablo Torre",
-        "Cubarsi", "Pau Cubarsi",
+        "Cubarsi", "Pau Cubarsi", "Pau Cubarsí",
         # Staff
         "Flick", "Hansi Flick", "Deco", "Laporta", "Joan Laporta",
     }
@@ -367,11 +367,12 @@ class TweetRewriter:
     def _cleanup_protected_terms(self, text: str) -> str:
         """Remove any remaining protected term placeholders as a safety net.
         
-        Placeholders have the format __PROTECTED_X__ where X is a number.
-        This is a final safeguard in case restoration missed any.
+        Placeholders have the format __PROTECTED_...__ (may contain numbers or names if LLM mimics format).
+        This is a final safeguard in case restoration missed any or LLM generated its own.
         """
-        # Match __PROTECTED_N__ where N is any number
-        return re.sub(r'__PROTECTED_\d+__', '', text)
+        # Match __PROTECTED_...__ where ... can be any characters (non-greedy)
+        # Handles both numeric placeholders (__PROTECTED_0__) and LLM-generated ones (__PROTECTED_Iker_Rodríguez__)
+        return re.sub(r'__PROTECTED_.+?__', '', text)
 
     def _extract_alert_keyword(self, text: str) -> tuple[str, str]:
         """Extract alert keyword from the beginning of text.
@@ -426,13 +427,22 @@ class TweetRewriter:
                 return f"score not in source: {score[0]}-{score[1]}"
         return None
 
+    def _normalize_for_matching(self, text: str) -> str:
+        """Normalize text for case-insensitive and accent-insensitive matching."""
+        import unicodedata
+        # Remove accents
+        text = unicodedata.normalize('NFD', text)
+        text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
+        return text.lower()
+
     def _extract_names(self, text: str) -> Set[str]:
-        """Extract all known player/staff names from text (case-insensitive)."""
+        """Extract all known player/staff names from text (case-insensitive and accent-insensitive)."""
         found = set()
-        text_lower = text.lower()
+        text_norm = self._normalize_for_matching(text)
         for name in self._VALID_NAMES:
+            name_norm = self._normalize_for_matching(name)
             # Use word boundaries to avoid partial matches
-            if re.search(rf"\b{re.escape(name.lower())}\b", text_lower):
+            if re.search(rf"\b{re.escape(name_norm)}\b", text_norm):
                 found.add(name)
         return found
 
@@ -739,7 +749,8 @@ class TweetRewriter:
                 fact_error2 = self._facts_check(attempt2, cleaned, source_mention)
                 name_error2 = self._validate_names(attempt2, cleaned, vision_context, source_mention, source_username)
                 if not fact_error2 and not name_error2 and not self._detect_plagiarism(cleaned, attempt2):
-                    return attempt2
+                    # Normalize output format before returning
+                    return self._normalize_output_format(attempt2, source_username, source_mention)
                 logger.warning("Second attempt also failed checks, using first attempt")
 
         # Final length check and truncation for both attempts
@@ -920,8 +931,9 @@ class TweetRewriter:
             text = '🚨 ' + text
 
         # Suppression de toute attribution/suffixe en fin de texte existant
-        text = re.sub(r'\s*🔵🔴(\s*\n?\s*(\[@\w+\]\s*)+)?\s*$', '', text).rstrip()
-        text = re.sub(r'\s*(\[@\w+\]\s*)+$', '', text).rstrip()
+        # Match 🔵🔴 followed by any bracketed content, or just bracketed content at end
+        text = re.sub(r'\s*🔵🔴(\s*\n?\s*(\[.*?\]\s*)+)?\s*$', '', text).rstrip()
+        text = re.sub(r'\s*(\[.*?\]\s*)+$', '', text).rstrip()
 
         # Construction du suffixe pour 1 ou plusieurs sources
         # ONLY use source_mention (explicit source cited in tweet text)
