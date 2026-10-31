@@ -27,13 +27,9 @@ embeddings:
 
 sources:
   accounts:
-    - "Forca_Fcb"
-    - "BarcaTimes"
     - "ReshadRahman"
     - "BarcaUniversal"
-    - "Barca_buzz"
     - "barcacentre"
-    - "ManagingBarca"
     - "FCBarcelona"
     - "FabrizioRomano"
     - "MesBlaugrana"
