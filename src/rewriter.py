@@ -144,6 +144,11 @@ class TweetRewriter:
         # Fix capitalization after period/newline (sentence start)
         (re.compile(r'(\.\s+)([a-z])'), lambda m: m.group(1) + m.group(2).upper()),
         (re.compile(r'(\n\s*)([a-z])'), lambda m: m.group(1) + m.group(2).upper()),
+        # Capitalize after colon + space (for "🚨 OFFICIAL: matchday" -> "🚨 OFFICIAL: Matchday")
+        (re.compile(r'(:\s+)([a-z])'), lambda m: m.group(1) + m.group(2).upper()),
+        # Remove spurious "And " before player names (e.g., "And Cubarsí" -> "Cubarsí")
+        (re.compile(r'\bAnd\s+(Gavi|Fermín|Pedri|De Jong|Bernal|Yamal|Raphinha|Balde|Cubarsí|Lamine)\b', re.IGNORECASE), lambda m: m.group(1)),
+        (re.compile(r'\bAnd\s+(Koundé|Araújo|Ter Stegen|Olmo|Ferran Torres|Ansu Fati|Eric García|Iñigo Martínez|Andreas Christensen|Iñaki Peña|Wojciech Szczęsny|Héctor Fort|Marc Casado|Marc Bernal|Pablo Torre|Pau Víctor|Álex Domínguez)\b', re.IGNORECASE), lambda m: m.group(1)),
         # Capitalize common team names (Premier League / Champions League)
         (re.compile(r"\bmanchester city\b", re.IGNORECASE), "Manchester City"),
         (re.compile(r"\bmanchester united\b", re.IGNORECASE), "Manchester United"),
@@ -196,6 +201,37 @@ class TweetRewriter:
         (re.compile(r"\bxavi hernandez\b", re.IGNORECASE), "Xavi Hernandez"),
         (re.compile(r"\bxavi hernández\b", re.IGNORECASE), "Xavi Hernández"),
         (re.compile(r"\bxavi creus\b", re.IGNORECASE), "Xavi Creus"),
+        # Capitalize current squad players (fix common lowercase variants)
+        (re.compile(r"\bgavi\b", re.IGNORECASE), "Gavi"),
+        (re.compile(r"\bde jong\b", re.IGNORECASE), "De Jong"),
+        (re.compile(r"\bfrenkie de jong\b", re.IGNORECASE), "Frenkie de Jong"),
+        (re.compile(r"\bferm(i|í)n\b", re.IGNORECASE), "Fermín"),
+        (re.compile(r"\bferm(i|í)n lopez\b", re.IGNORECASE), "Fermín López"),
+        (re.compile(r"\bcubars(i|í)\b", re.IGNORECASE), "Cubarsí"),
+        (re.compile(r"\bpau cubars(i|í)\b", re.IGNORECASE), "Pau Cubarsí"),
+        (re.compile(r"\bbalde\b", re.IGNORECASE), "Balde"),
+        (re.compile(r"\balejandro balde\b", re.IGNORECASE), "Alejandro Balde"),
+        (re.compile(r"\bkounde\b", re.IGNORECASE), "Koundé"),
+        (re.compile(r"\bjules kounde\b", re.IGNORECASE), "Jules Koundé"),
+        (re.compile(r"\baraujo\b", re.IGNORECASE), "Araújo"),
+        (re.compile(r"\bronald araujo\b", re.IGNORECASE), "Ronald Araújo"),
+        (re.compile(r"\bter stegen\b", re.IGNORECASE), "Ter Stegen"),
+        (re.compile(r"\bmarc-andre ter stegen\b", re.IGNORECASE), "Marc-André ter Stegen"),
+        (re.compile(r"\bolmo\b", re.IGNORECASE), "Olmo"),
+        (re.compile(r"\bdani olmo\b", re.IGNORECASE), "Dani Olmo"),
+        (re.compile(r"\bferran torres\b", re.IGNORECASE), "Ferran Torres"),
+        (re.compile(r"\bansu fati\b", re.IGNORECASE), "Ansu Fati"),
+        (re.compile(r"\beric garci(a|á)\b", re.IGNORECASE), "Eric García"),
+        (re.compile(r"\bigo martinez\b", re.IGNORECASE), "Iñigo Martínez"),
+        (re.compile(r"\bandreas christensen\b", re.IGNORECASE), "Andreas Christensen"),
+        (re.compile(r"\binaki pena\b", re.IGNORECASE), "Iñaki Peña"),
+        (re.compile(r"\bwojciech szczesny\b", re.IGNORECASE), "Wojciech Szczęsny"),
+        (re.compile(r"\bhector fort\b", re.IGNORECASE), "Héctor Fort"),
+        (re.compile(r"\bmarc casado\b", re.IGNORECASE), "Marc Casado"),
+        (re.compile(r"\bmarc bernal\b", re.IGNORECASE), "Marc Bernal"),
+        (re.compile(r"\bpablo torre\b", re.IGNORECASE), "Pablo Torre"),
+        (re.compile(r"\bpau victor\b", re.IGNORECASE), "Pau Víctor"),
+        (re.compile(r"\balex dominguez\b", re.IGNORECASE), "Álex Domínguez"),
         # Capitalize after comma + space (for cases like "OFFICIAL, xavi departs")
         (re.compile(r'(,\s+)([a-z])'), lambda m: m.group(1) + m.group(2).upper()),
     ]
@@ -902,7 +938,8 @@ class TweetRewriter:
     def _create_fallback_rewrite(self, source: str, source_username: str,
                                  source_mention: Optional[str] = None,
                                  alert_keyword: str = "",
-                                 source_had_alert: bool = False) -> str:
+                                 source_had_alert: bool = False,
+                                 source_lang: str = "en") -> str:
         """Build a clean, deterministic fallback tweet from the source text.
 
         Used when the LLM returns something invalid (security violation,
@@ -928,34 +965,193 @@ class TweetRewriter:
         if not cleaned:
             return ""
 
-        # Sentence-case the body (no uppercase except preserved alert words).
-        cleaned = cleaned[:1].upper() + cleaned[1:] if cleaned else cleaned
+        # Apply post-corrections for proper capitalization
+        cleaned = self._apply_post_corrections(cleaned)
 
-        # Build the headline. Only use 🚨 + alert keyword if the source had one.
-        if alert_keyword:
-            headline = f"🚨 {alert_keyword}: {cleaned}"
-        elif source_had_alert:
-            headline = f"🚨 {cleaned}"
-        else:
-            headline = cleaned
+        # Build a proper journalistic rewrite based on detected patterns
+        headline = self._build_fallback_headline(cleaned, alert_keyword, source_had_alert, source_lang)
+        body = self._build_fallback_body(cleaned, source_lang)
+        suffix = self._build_fallback_suffix(source_mention)
 
-        # Attribution suffix: explicit source (Cas A) or just 🔵🔴 (Cas B).
-        if source_mention:
-            handles = [h for h in re.findall(r"@?(\w+)", source_mention) if h.lower() != "via"]
-            sources_str = " ".join(f"[@{h}]" for h in handles) if handles else ""
-            suffix = f"🔵🔴\n{sources_str}" if sources_str else "🔵🔴"
-        else:
-            suffix = "🔵🔴"
-
-        fallback = f"{headline}\n\n{suffix}"
+        fallback = f"{headline}\n\n{body}\n\n{suffix}"
         if weighted_length(fallback) > self.max_chars:
             # Truncate the body to fit, preserving headline + suffix.
-            budget = self.max_chars - weighted_length(suffix) - weighted_length(headline) - 4
-            if budget > 20:
-                fallback = headline + "\n\n" + cleaned[:budget].rstrip() + "…" + "\n\n" + suffix
+            budget = self.max_chars - weighted_length(suffix) - weighted_length(headline) - 6
+            if budget > 30:
+                fallback = headline + "\n\n" + body[:budget].rstrip() + "…" + "\n\n" + suffix
             else:
                 fallback = headline + "\n\n" + suffix
         return fallback
+
+    def _build_fallback_headline(self, cleaned: str, alert_keyword: str, source_had_alert: bool, source_lang: str = "en") -> str:
+        """Build a professional headline from cleaned source text."""
+        import re
+        # Clean up the text first - remove remaining 🚨, pipes, and leading punctuation
+        clean_text = re.sub(r'^🚨\s*', '', cleaned)
+        clean_text = re.sub(r'^[\|\s:,\-–—]+', '', clean_text)
+        clean_text = clean_text.strip()
+        cleaned_lower = clean_text.lower()
+        
+        # Check for specific content types (English and French keywords)
+        is_squad_announcement = (
+            any(word in cleaned_lower for word in ["squad", "matchday", "lineup", "convocados", "convocatoria", "équipe", "convocation"]) and
+            any(word in cleaned_lower for word in ["official", "announced", "confirmed", "revealed", "named", "published", "officiel", "confirmé", "publié"])
+        )
+        is_injury = any(word in cleaned_lower for word in ["injury", "injured", "sidelined", "blessure", "out for", "ruled out", "forfait", "indisponible"])
+        is_transfer = any(word in cleaned_lower for word in ["sign", "transfer", "fichaje", "contract", "deal", "agreement", "joins", "move to", "linked", "signe", "transfert", "accord"])
+        is_match_preview = any(word in cleaned_lower for word in ["will face", "face", "preview", "ahead of", "clash", "fixture against", "affronte", "avant", "preview"])
+        is_retirement = any(word in cleaned_lower for word in ["retire", "retirement", "announces retirement", "hangs up", "steps down", "prend sa retraite", "annonce sa retraite"])
+        is_birthday = any(word in cleaned_lower for word in ["birthday", "anniversaire", "cumpleaños", "born on", "né le"])
+        
+        # Extract alert keyword from source if not provided
+        if not alert_keyword and source_had_alert:
+            alert_match = re.search(r'🚨\s*(JUST IN|BREAKING|OFFICIAL|URGENT|OFFICIEL)', clean_text, re.IGNORECASE)
+            if alert_match:
+                alert_keyword = alert_match.group(1).upper()
+        
+        # Build headline based on content type - always English output
+        if alert_keyword:
+            if is_squad_announcement:
+                return f"🚨 {alert_keyword}: Matchday squad announced for La Liga fixture"
+            elif is_injury:
+                return f"🚨 {alert_keyword}: Injury update"
+            elif is_transfer:
+                return f"🚨 {alert_keyword}: Transfer news"
+            elif is_retirement:
+                return f"🚨 {alert_keyword}: Retirement announcement"
+            elif is_match_preview:
+                return f"🚨 {alert_keyword}: Match preview"
+            elif is_birthday:
+                return f"🚨 {alert_keyword}: Former Barcelona player celebrates birthday"
+            else:
+                return f"🚨 {alert_keyword}: Barcelona news"
+        elif source_had_alert:
+            if is_squad_announcement:
+                return "🚨 Matchday squad announced for La Liga fixture"
+            elif is_injury:
+                return "🚨 Injury update"
+            elif is_transfer:
+                return "🚨 Transfer news"
+            elif is_retirement:
+                return "🚨 Retirement announcement"
+            elif is_match_preview:
+                return "🚨 Match preview: Barcelona upcoming fixture"
+            elif is_birthday:
+                return "🚨 Former Barcelona player celebrates birthday"
+            else:
+                return "🚨 Barcelona news"
+        else:
+            # No alert - start directly
+            if is_squad_announcement:
+                return "Matchday squad announced for La Liga fixture"
+            elif is_injury:
+                return "Injury update issued"
+            elif is_transfer:
+                return "Transfer developments reported"
+            elif is_match_preview:
+                return "Match preview: Barcelona upcoming fixture"
+            elif is_retirement:
+                return "Retirement announcement"
+            elif is_birthday:
+                return "Former Barcelona player celebrates birthday"
+            else:
+                return "Barcelona news update"
+
+    def _build_fallback_body(self, cleaned: str, source_lang: str = "en") -> str:
+        """Build a professional body text from cleaned source."""
+        import re
+        # Clean up the text first
+        clean_text = re.sub(r'^🚨\s*', '', cleaned)
+        clean_text = re.sub(r'^[\|\s:,\-–—]+', '', clean_text)
+        clean_text = clean_text.strip()
+        cleaned_lower = clean_text.lower()
+        
+        # Check for specific content types (English and French keywords)
+        is_squad_announcement = (
+            any(word in cleaned_lower for word in ["squad", "matchday", "lineup", "convocados", "convocatoria", "équipe", "convocation"]) and
+            any(word in cleaned_lower for word in ["official", "announced", "confirmed", "revealed", "named", "published", "officiel", "confirmé", "publié"])
+        )
+        is_injury = any(word in cleaned_lower for word in ["injury", "injured", "sidelined", "blessure", "out for", "ruled out", "forfait", "indisponible"])
+        is_transfer = any(word in cleaned_lower for word in ["sign", "transfer", "fichaje", "contract", "deal", "agreement", "joins", "move to", "linked", "signe", "transfert", "accord"])
+        is_match_preview = any(word in cleaned_lower for word in ["will face", "face", "preview", "ahead of", "clash", "fixture against", "affronte", "avant", "preview"])
+        is_retirement = any(word in cleaned_lower for word in ["retire", "retirement", "announces retirement", "hangs up", "steps down", "prend sa retraite", "annonce sa retraite"])
+        is_birthday = any(word in cleaned_lower for word in ["birthday", "anniversaire", "cumpleaños", "born on", "né le"])
+        
+        # Try to extract player names and build a proper sentence
+        # Pattern: "featuring X, Y, Z" or "comprising X, Y, Z" or "convocados X, Y, Z"
+        # Exclude generic words like "with", "including" that appear in non-list contexts
+        list_pattern = r'(?:featuring|comprising|convocados?|comprend|comprenant|nommés?|sélectionnés?)\s+([^.]+)'
+        match = re.search(list_pattern, clean_text, re.IGNORECASE)
+        
+        if match:
+            names_str = match.group(1).strip()
+            # Clean up the names string
+            names_str = re.sub(r'\s+and\s+', ', ', names_str, flags=re.IGNORECASE)
+            names_str = re.sub(r'\s+et\s+', ', ', names_str, flags=re.IGNORECASE)
+            names_str = re.sub(r'\s*,\s*', ', ', names_str)
+            names_str = re.sub(r'\bAnd\s+', '', names_str)  # Remove spurious "And"
+            names_str = re.sub(r'\bEt\s+', '', names_str)  # Remove spurious "Et"
+            names = [n.strip() for n in names_str.split(',') if n.strip()]
+            # Apply post-corrections to each name
+            corrected_names = []
+            for name in names:
+                name = self._apply_post_corrections(name)
+                corrected_names.append(name)
+            
+            if corrected_names:
+                if len(corrected_names) <= 2:
+                    names_formatted = " and ".join(corrected_names)
+                else:
+                    names_formatted = ", ".join(corrected_names[:-1]) + f" and {corrected_names[-1]}"
+                
+                if is_squad_announcement:
+                    return f"The following players have been included in the squad: {names_formatted}."
+                elif is_injury:
+                    return f"The following players are sidelined: {names_formatted}."
+                elif is_transfer:
+                    return f"The player is linked with a move to Barcelona: {names_formatted}."
+                elif is_birthday:
+                    return f"The former Barcelona star turns another year older."
+                else:
+                    return f"Key figures mentioned include {names_formatted}."
+        
+        # Try transfer-specific name extraction: "sign X", "agree deal to sign X", "linked with X"
+        if is_transfer:
+            transfer_patterns = [
+                r'(?:sign|agree deal to sign|agreed to sign|deal for|move for|linked with|target)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)',
+                r'(?:transfer|fichaje|signe|transfert).*?\b([A-Z][a-z]+\s+[A-Z][a-z]+)\b',
+            ]
+            for pattern in transfer_patterns:
+                match = re.search(pattern, clean_text, re.IGNORECASE)
+                if match:
+                    name = match.group(1).strip()
+                    name = self._apply_post_corrections(name)
+                    return f"Barcelona are close to signing {name}."
+        
+        # If no list pattern found, return a generic sentence based on content type
+        if is_squad_announcement:
+            return "The matchday squad has been confirmed for the upcoming La Liga fixture."
+        elif is_injury:
+            return "An injury update has been issued regarding the player's availability."
+        elif is_transfer:
+            return "Transfer developments are being reported regarding a potential move."
+        elif is_match_preview:
+            return "Barcelona prepare for their upcoming La Liga fixture."
+        elif is_retirement:
+            return "The club legend announces the end of their coaching career."
+        elif is_birthday:
+            return "The former Barcelona player celebrates their birthday."
+        
+        # Generic fallback - always English
+        return "Updates regarding Barcelona are being reported."
+
+    def _build_fallback_suffix(self, source_mention: Optional[str]) -> str:
+        """Build the attribution suffix."""
+        if source_mention:
+            handles = [h for h in re.findall(r"@?(\w+)", source_mention) if h.lower() != "via"]
+            sources_str = " ".join(f"[@{h}]" for h in handles) if handles else ""
+            return f"🔵🔴\n{sources_str}" if sources_str else "🔵🔴"
+        return "🔵🔴"
 
     def _detect_plagiarism(self, original: str, rewritten: str) -> bool:
         """Enhanced plagiarism check using word overlap and semantic similarity."""
@@ -1043,6 +1239,7 @@ class TweetRewriter:
                 source_mention=source_mention,
                 alert_keyword=alert_keyword,
                 source_had_alert=bool(alert_keyword),
+                source_lang=source_lang,
             )
 
         # Build vision context string for prompt
@@ -1140,7 +1337,7 @@ class TweetRewriter:
         if not attempt1:
             logger.warning("LLM returned empty on first attempt, using fallback rewrite")
             return self._create_fallback_rewrite(
-                cleaned, source_username, source_mention, alert_keyword, source_had_alert
+                cleaned, source_username, source_mention, alert_keyword, source_had_alert, source_lang
             )
 
         # Restore protected terms
@@ -1174,8 +1371,17 @@ class TweetRewriter:
             name_list_error = "output is a name list, not a coherent narrative"
             logger.warning(f"Name list detected: {name_list_error}")
 
-        # Check plagiarism
-        if self._detect_plagiarism(cleaned, attempt1) or fact_error or name_error or name_list_error:
+        # Check plagiarism and other validation issues
+        attempt1_valid = (
+            not self._detect_plagiarism(cleaned, attempt1) 
+            and not fact_error and not name_error and not name_list_error
+        )
+        
+        attempt2_valid = False
+        attempt2 = None
+        
+        if not attempt1_valid:
+            # First attempt failed - generate strict retry
             strict_prompt = (
                 f"Source: {protected_source}"
                 f"{vision_prompt}\n\n"
@@ -1206,17 +1412,26 @@ class TweetRewriter:
                 if self._is_name_list(attempt2, required_names):
                     name_list_error2 = "output is a name list, not a coherent narrative"
                     logger.warning(f"Name list detected on retry: {name_list_error2}")
-                if not fact_error2 and not name_error2 and not name_list_error2 and not self._detect_plagiarism(cleaned, attempt2):
+                attempt2_valid = (
+                    not fact_error2 and not name_error2 and not name_list_error2 
+                    and not self._detect_plagiarism(cleaned, attempt2)
+                )
+                if attempt2_valid:
                     # Normalize output format before returning
                     return self._normalize_output_format(attempt2, source_username, source_mention, source_had_alert)
-                logger.warning("Second attempt also failed checks, using first attempt")
+                logger.warning("Second attempt also failed checks, falling back to fallback rewrite")
 
-        # Final length check and truncation for both attempts
-        final_text = attempt1
-        
-        # If attempt2 was used and passed checks, use it
-        if 'attempt2' in locals() and attempt2:
+        # Determine final text
+        if attempt1_valid:
+            final_text = attempt1
+        elif attempt2_valid and attempt2:
             final_text = attempt2
+        else:
+            # Both attempts failed - use deterministic fallback
+            logger.warning("Both LLM attempts failed validation, using fallback rewrite")
+            return self._create_fallback_rewrite(
+                cleaned, source_username, source_mention, alert_keyword, source_had_alert, source_lang
+            )
         
         # Ensure length compliance with retries
         final_text = self._enforce_length_limit(
@@ -1268,14 +1483,14 @@ class TweetRewriter:
                     return attempt1_norm
             # Fall back to fallback rewrite if all else fails
             return self._create_fallback_rewrite(
-                cleaned, source_username, source_mention, alert_keyword, source_had_alert
+                cleaned, source_username, source_mention, alert_keyword, source_had_alert, source_lang
             )
         
         # Check for non-English text (Chinese, Arabic, etc.)
         if not self._is_english_only(final_text):
             logger.warning("Rewrite contains non-English characters, rejecting")
             return self._create_fallback_rewrite(
-                cleaned, source_username, source_mention, alert_keyword, source_had_alert
+                cleaned, source_username, source_mention, alert_keyword, source_had_alert, source_lang
             )
 
         # Check for security violations
@@ -1283,7 +1498,7 @@ class TweetRewriter:
         if security_error:
             logger.warning(f"Security violation detected: {security_error}")
             return self._create_fallback_rewrite(
-                cleaned, source_username, source_mention, alert_keyword, source_had_alert
+                cleaned, source_username, source_mention, alert_keyword, source_had_alert, source_lang
             )
 
         # Final validation before returning
@@ -1291,7 +1506,7 @@ class TweetRewriter:
         if final_val_error:
             logger.warning(f"Final name validation failed after all retries: {final_val_error}")
             return self._create_fallback_rewrite(
-                cleaned, source_username, source_mention, alert_keyword, source_had_alert
+                cleaned, source_username, source_mention, alert_keyword, source_had_alert, source_lang
             )
 
         return final_text
