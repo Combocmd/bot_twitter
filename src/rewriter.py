@@ -143,6 +143,30 @@ class TweetRewriter:
         (re.compile(r"\bOFFICIAL:\s*official\b", re.IGNORECASE), "OFFICIAL:"),
     ]
 
+    # Absolute security guard: internal control words that must NEVER appear
+    # in a published tweet. If the LLM leaks these (e.g. "Barcelona: SKIP"),
+    # the rewrite is rejected and a clean fallback is used instead of
+    # publishing anything malformed.
+    _SECURITY_BANNED = (
+        re.compile(r"\bSKIP\b"),
+        re.compile(r"\bAPPROVE\b"),
+    )
+
+    # Tier-1 football journalists eligible for Cas B attribution (no explicit
+    # source cited in the tweet). Aggregators and fan accounts are deliberately
+    # NOT in this set - they are never used as attribution sources.
+    _TIER1_JOURNALISTS = {
+        "FabrizioRomano", "DavidOrnstein", "GianlucaDiMarzio", "RomainMolina",
+        "LorenzoBettoni", "MikaelGarcia", "GerardRomero", "KavehSolhekol",
+        "JulienLaurens", "DhruvGhelani", "SamiMokbell", "BenJacobs",
+        "PhilHay", "AdamBate", "ScottMerson", "NizaarKinsella",
+        "JT", "PhilHay", "AaronBranford", "JamesDucker", "SamCronin",
+        "Alex Dunn", "Rob Dorsett", "MarkBoyle", "Ross".lower(),
+    }
+
+    # Tier-1 journalists who've rated tweets recently (for dynamic attribution)
+    _TWEET_RATED_JOURNALISTS = set()
+
     # All known Barça players + staff for validation (must match _PROTECTED_TERMS)
     _VALID_NAMES = {
         # Players
@@ -203,19 +227,19 @@ class TweetRewriter:
 
     def _call_gemini_llm(self, system: str, user: str) -> str:
         """Call Gemini API with the given system and user prompts using new google-genai SDK.
-        
+
         Includes 2 retries for 503 (High Demand) errors before falling back to Ollama.
         """
         if not self._gemini_available or not self._gemini_client:
             logger.debug("Gemini not available, skipping")
             return ""
-        
+
         max_retries = 2
         for attempt in range(max_retries + 1):
             try:
                 # Combine system and user prompts for Gemini
                 full_prompt = f"{system}\n\n{user}"
-                
+
                 response = self._gemini_client.models.generate_content(
                     model=self._gemini_model,
                     contents=full_prompt,
@@ -224,30 +248,40 @@ class TweetRewriter:
                         max_output_tokens=220,
                     )
                 )
-                
+
                 if response.text:
                     result = response.text.strip()
                     logger.debug(f"Gemini call succeeded on attempt {attempt + 1}")
                     return result
                 else:
                     logger.warning(f"Gemini returned empty response on attempt {attempt + 1}")
-                    
+
             except Exception as e:
                 error_msg = str(e)
                 logger.warning(f"Gemini error (attempt {attempt + 1}/{max_retries + 1}): {error_msg}")
-                
+
                 # Check for 503 (High Demand) - retry
                 if "503" in error_msg or "UNAVAILABLE" in error_msg.upper() or "HIGH DEMAND" in error_msg.upper():
                     if attempt < max_retries:
                         import time
                         time.sleep(1.5 * (attempt + 1))  # Exponential backoff
                         continue
-                
+
                 # For other errors, don't retry
                 break
-        
+
         logger.warning("Gemini failed after retries, will fall back to Ollama")
         return ""
+
+    def _sanitize_for_fallback(self, text: str) -> str:
+        """Clean text for fallback generation - removes URLs, mentions, hashtags."""
+        from .timeutil import clean_tweet_text
+        cleaned = clean_tweet_text(text)
+        cleaned = re.sub(r"https?://\S+", "", cleaned)
+        cleaned = re.sub(r"(?<!\w)@\w+", "", cleaned)
+        cleaned = re.sub(r"#\w+", "", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
 
     def _llm_generate(self, system: str, user: str, context: str = "") -> str:
         """Generate text using Gemini (priority) with Ollama fallback.
@@ -517,6 +551,61 @@ class TweetRewriter:
             return False
         return True
 
+    def _is_name_list(self, text: str, required_names: List[str]) -> bool:
+        """Detect if the output is just a list of names rather than a coherent narrative.
+        
+        Returns True if the text appears to be just comma/space-separated names
+        without proper sentence structure.
+        """
+        if not text:
+            return True
+        
+        # Remove the alert prefix and suffix for analysis
+        body = text
+        # Remove 🚨 prefix
+        body = re.sub(r'^🚨\s*', '', body)
+        # Remove alert keyword if present
+        body = re.sub(r'^(JUST IN|BREAKING|OFFICIAL|URGENT)[\s:]+', '', body, flags=re.IGNORECASE)
+        # Remove suffix
+        body = re.sub(r'\s*🔵🔴.*$', '', body)
+        body = body.strip()
+        
+        if not body:
+            return True
+            
+        # Check if body is mostly just names separated by commas/and
+        # Split by common separators
+        parts = re.split(r'[,\n]+|\s+and\s+', body)
+        parts = [p.strip() for p in parts if p.strip()]
+        
+        if len(parts) < 2:
+            return False
+            
+        # Count how many parts are just names (from required_names or known names)
+        name_like_count = 0
+        for part in parts:
+            part_lower = part.lower()
+            # Check if part matches a required name or known Barça name
+            for req_name in required_names:
+                if req_name.lower() in part_lower or part_lower in req_name.lower():
+                    name_like_count += 1
+                    break
+            else:
+                # Check against known names
+                for valid_name in self._VALID_NAMES:
+                    if valid_name.lower() in part_lower or part_lower in valid_name.lower():
+                        name_like_count += 1
+                        break
+        
+        # If most parts are just names, it's a name list
+        name_ratio = name_like_count / len(parts) if parts else 0
+        
+        # Also check for lack of verbs (indicates not a sentence)
+        has_verb = bool(re.search(r'\b(is|are|was|were|has|have|had|will|would|could|should|signs?|scores?|wins?|loses?|plays?|trains?|returns?|extends?|agrees?|joins?|leaves?|moves?|beats?|defeats?)\b', body, re.IGNORECASE))
+        
+        # It's a name list if: high name ratio AND no verb (no sentence structure)
+        return name_ratio > 0.6 and not has_verb
+
     def _fix_missing_names(self, text: str, source: str, vision_context: Optional[Dict] = None) -> str:
         """Try to fix rewrite by adding missing source names naturally."""
         source_names = self._extract_names(source)
@@ -556,6 +645,76 @@ class TweetRewriter:
         for pattern, replacement in self._POST_CORRECTIONS:
             text = pattern.sub(replacement, text)
         return text
+
+    def _security_check(self, text: str) -> Optional[str]:
+        """Reject any internal control word that leaked into the published text.
+
+        Returns an error message if a banned word is present, else None.
+        """
+        if not text:
+            return "texte vide"
+        for pattern in self._SECURITY_BANNED:
+            if pattern.search(text):
+                return f"mot interdit détecté: {pattern.pattern}"
+        return None
+
+    def _create_fallback_rewrite(self, source: str, source_username: str,
+                                 source_mention: Optional[str] = None,
+                                 alert_keyword: str = "",
+                                 source_had_alert: bool = False) -> str:
+        """Build a clean, deterministic fallback tweet from the source text.
+
+        Used when the LLM returns something invalid (security violation,
+        non-English, too long, empty). Never publishes raw LLM output that
+        failed validation.
+        """
+        cleaned = clean_tweet_text(source)
+        if not cleaned:
+            return ""
+
+        # Strip URLs, remaining mentions and hashtags.
+        cleaned = re.sub(r"https?://\S+", "", cleaned)
+        cleaned = re.sub(r"(?<!\w)@\w+", "", cleaned)
+        cleaned = re.sub(r"#\w+", "", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if not cleaned:
+            return ""
+
+        # Remove security-banned words (SKIP, APPROVE) from the fallback text
+        for pattern in self._SECURITY_BANNED:
+            cleaned = pattern.sub("", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if not cleaned:
+            return ""
+
+        # Sentence-case the body (no uppercase except preserved alert words).
+        cleaned = cleaned[:1].upper() + cleaned[1:] if cleaned else cleaned
+
+        # Build the headline. Only use 🚨 + alert keyword if the source had one.
+        if alert_keyword:
+            headline = f"🚨 {alert_keyword}: {cleaned}"
+        elif source_had_alert:
+            headline = f"🚨 {cleaned}"
+        else:
+            headline = cleaned
+
+        # Attribution suffix: explicit source (Cas A) or just 🔵🔴 (Cas B).
+        if source_mention:
+            handles = [h for h in re.findall(r"@?(\w+)", source_mention) if h.lower() != "via"]
+            sources_str = " ".join(f"[@{h}]" for h in handles) if handles else ""
+            suffix = f"🔵🔴\n{sources_str}" if sources_str else "🔵🔴"
+        else:
+            suffix = "🔵🔴"
+
+        fallback = f"{headline}\n\n{suffix}"
+        if weighted_length(fallback) > self.max_chars:
+            # Truncate the body to fit, preserving headline + suffix.
+            budget = self.max_chars - weighted_length(suffix) - weighted_length(headline) - 4
+            if budget > 20:
+                fallback = headline + "\n\n" + cleaned[:budget].rstrip() + "…" + "\n\n" + suffix
+            else:
+                fallback = headline + "\n\n" + suffix
+        return fallback
 
     def _detect_plagiarism(self, original: str, rewritten: str) -> bool:
         """Enhanced plagiarism check using word overlap and semantic similarity."""
@@ -629,6 +788,22 @@ class TweetRewriter:
         # Extract alert keyword from the beginning of the text
         cleaned, alert_keyword = self._extract_alert_keyword(cleaned)
 
+        # Security check: reject any internal control word (e.g. SKIP/APPROVE)
+        # that leaked into the source text BEFORE any LLM processing.
+        security_error = self._security_check(cleaned)
+        if security_error:
+            logger.warning(
+                f"Security violation detected in source text: {security_error}. "
+                f"Returning fallback rewrite instead of LLM output."
+            )
+            return self._create_fallback_rewrite(
+                source=text,
+                source_username=source_username,
+                source_mention=source_mention,
+                alert_keyword=alert_keyword,
+                source_had_alert=bool(alert_keyword),
+            )
+
         # Build vision context string for prompt
         vision_prompt = ""
         required_names = []
@@ -647,29 +822,40 @@ class TweetRewriter:
             if vision_parts:
                 vision_prompt = "\n\nVISION CONTEXT (from media analysis):\n" + "\n".join(vision_parts)
 
+        # Track if source had alert keywords for 🚨 handling
+        source_had_alert = bool(alert_keyword)
+
         required_names = []
         if vision_context and vision_context.get("players_detected"):
             required_names.extend(vision_context["players_detected"])
 
-        # Attribution logic: ONLY use source_mention (explicit source cited in tweet text)
-        # If source_mention exists, it will be the suffix
-        # If NO source_mention, NO handle is added (just 🔵🔴)
-        # source_username (monitored account) is NEVER used as a source handle
-        # because aggregators are not sources - only explicitly cited sources are
+        # Attribution logic: Cas A/B with tier-1 journalists
+        # Cas A: Use source_mention (explicit citation in tweet text)
+        # Cas B: Use tier-1 journalist if source_username is eligible
+        # Aggregators are never used as attribution sources
         attribution_source = source_mention
         if attribution_source and attribution_source.strip():
+            # Cas A: explicit source citation
             required_names.append(f"[@{attribution_source}]")
+        else:
+            # Cas B: tier-1 journalist attribution
+            username_lower = source_username.lower().lstrip("@")
+            if username_lower in {name.lower() for name in self._TIER1_JOURNALISTS}:
+                required_names.append(f"[@{source_username}]")
 
         source_names = self._extract_names(cleaned)
         for name in source_names:
             if name not in required_names:
                 required_names.append(name)
 
+        # Deduplicate required names (case-insensitive, handle variants like "Yamal" vs "Lamine Yamal")
         seen_lower = set()
         deduped_names = []
         for name in required_names:
             name_lower = name.lower()
-            if name_lower not in seen_lower:
+            # Skip if this name is a substring of an already-added name (e.g., "Yamal" when "Lamine Yamal" exists)
+            is_substring = any(name_lower in existing.lower() or existing.lower() in name_lower for existing in deduped_names)
+            if name_lower not in seen_lower and not is_substring:
                 seen_lower.add(name_lower)
                 deduped_names.append(name)
 
@@ -683,7 +869,7 @@ class TweetRewriter:
             f"Source language: {source_lang}\n"
             f"Original tweet: {protected_source}"
             f"{vision_prompt}\n\n"
-            f"REQUIRED NAMES (must ALL appear in rewrite): {required_names_str}\n\n"
+            f"REQUIRED NAMES (must ALL appear naturally in rewrite): {required_names_str}\n\n"
             f"ALERT KEYWORD (must appear immediately after 🚨 in headline): {alert_keyword if alert_keyword else 'none'}\n\n"
             f"SOURCE HANDLE: The final 🔵🔴 suffix MUST use the EXACT handle from REQUIRED NAMES. "
             f"Do NOT invent or substitute any other handle (e.g., @_BarcaInfo, @FabrizioRomano).\n\n"
@@ -691,6 +877,8 @@ class TweetRewriter:
             "Only use vision context for player names or text visible in media. "
             "Do NOT add scene descriptions or inferred details not in the source text. "
             "CRITICAL: Every name in REQUIRED NAMES must appear in your output. Do not omit any. "
+            "CRITICAL: Write a COHERENT NEWS SUMMARY — integrate names naturally into sentences. "
+            "DO NOT simply list names separated by commas. That is NOT a valid rewrite. "
             "FORMAT: Start with 🚨. Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. "
             "State each fact exactly once — no redundant repetition of names or information. "
             "IMPORTANT: The ALERT KEYWORD (if provided) must ONLY appear immediately after 🚨 in the headline. "
@@ -701,7 +889,10 @@ class TweetRewriter:
         # Get first attempt
         attempt1 = self._llm_generate(self.ENGLISH_REWRITE_SYSTEM, prompt, "first attempt")
         if not attempt1:
-            return ""
+            logger.warning("LLM returned empty on first attempt, using fallback rewrite")
+            return self._create_fallback_rewrite(
+                cleaned, source_username, source_mention, alert_keyword, source_had_alert
+            )
 
         # Restore protected terms
         attempt1 = self._restore_terms(attempt1, protected_mapping)
@@ -724,8 +915,14 @@ class TweetRewriter:
         if name_error:
             logger.warning(f"Name validation failed: {name_error}")
 
+        # Check for name list (comma-separated names without sentence structure)
+        name_list_error = None
+        if self._is_name_list(attempt1, required_names):
+            name_list_error = "output is a name list, not a coherent narrative"
+            logger.warning(f"Name list detected: {name_list_error}")
+
         # Check plagiarism
-        if self._detect_plagiarism(cleaned, attempt1) or fact_error or name_error:
+        if self._detect_plagiarism(cleaned, attempt1) or fact_error or name_error or name_list_error:
             strict_prompt = (
                 f"Source: {protected_source}"
                 f"{vision_prompt}\n\n"
@@ -738,6 +935,8 @@ class TweetRewriter:
                 "Do NOT add any player or staff names that are not in the source text or vision context. "
                 "Only use vision context for player names or text visible in media. "
                 "Do NOT add scene descriptions or inferred details not in the source text. "
+                "CRITICAL: Write a COHERENT NEWS SUMMARY — integrate names naturally into sentences. "
+                "DO NOT simply list names separated by commas. That is NOT a valid rewrite. "
                 "FORMAT: Start with 🚨. Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. "
                 "State each fact exactly once — no redundant repetition of names or information. "
                 "Respond ONLY with the rewritten tweet."
@@ -748,9 +947,13 @@ class TweetRewriter:
                 attempt2 = self._apply_post_corrections(attempt2)
                 fact_error2 = self._facts_check(attempt2, cleaned, source_mention)
                 name_error2 = self._validate_names(attempt2, cleaned, vision_context, source_mention, source_username)
-                if not fact_error2 and not name_error2 and not self._detect_plagiarism(cleaned, attempt2):
+                name_list_error2 = None
+                if self._is_name_list(attempt2, required_names):
+                    name_list_error2 = "output is a name list, not a coherent narrative"
+                    logger.warning(f"Name list detected on retry: {name_list_error2}")
+                if not fact_error2 and not name_error2 and not name_list_error2 and not self._detect_plagiarism(cleaned, attempt2):
                     # Normalize output format before returning
-                    return self._normalize_output_format(attempt2, source_username, source_mention)
+                    return self._normalize_output_format(attempt2, source_username, source_mention, source_had_alert)
                 logger.warning("Second attempt also failed checks, using first attempt")
 
         # Final length check and truncation for both attempts
@@ -764,11 +967,12 @@ class TweetRewriter:
         final_text = self._enforce_length_limit(
             final_text, protected_source, vision_prompt, protected_mapping, 
             cleaned, vision_context, required_names_str,
-            source_mention=source_mention, source_username=source_username
+            source_mention=source_mention, source_username=source_username,
+            source_had_alert=source_had_alert
         )
         
         # Normalize output format (guarantees 🚨, \n\n sections, 🔵🔴 [@source] suffix)
-        final_text = self._normalize_output_format(final_text, source_username, source_mention)
+        final_text = self._normalize_output_format(final_text, source_username, source_mention, source_had_alert)
         
         # Check length after normalization (normalization shouldn't add much, but verify)
         from .timeutil import weighted_length
@@ -778,9 +982,10 @@ class TweetRewriter:
             final_text = self._enforce_length_limit(
                 final_text, protected_source, vision_prompt, protected_mapping,
                 cleaned, vision_context, required_names_str,
-                source_mention=source_mention, source_username=source_username
+                source_mention=source_mention, source_username=source_username,
+                source_had_alert=source_had_alert
             )
-            final_text = self._normalize_output_format(final_text, source_username, source_mention)
+            final_text = self._normalize_output_format(final_text, source_username, source_mention, source_had_alert)
             if weighted_length(final_text) > self.max_chars:
                 logger.error(f"Text still too long after normalization fix ({weighted_length(final_text)} chars)")
                 return ""
@@ -792,36 +997,44 @@ class TweetRewriter:
             # Try to fix by adding missing names
             fixed_text = self._fix_missing_names(final_text, cleaned, vision_context)
             if fixed_text and fixed_text != final_text:
-                fixed_text = self._normalize_output_format(fixed_text, source_username, source_mention)
+                fixed_text = self._normalize_output_format(fixed_text, source_username, source_mention, source_had_alert)
                 fixed_error = self._validate_names(fixed_text, cleaned, vision_context, source_mention, source_username)
                 if not fixed_error:
                     logger.info("Fixed missing names in rewrite")
                     return fixed_text
             # Fall back to attempt1 if it was valid
             if not name_error and attempt1:
-                attempt1_norm = self._normalize_output_format(attempt1, source_username, source_mention)
+                attempt1_norm = self._normalize_output_format(attempt1, source_username, source_mention, source_had_alert)
                 if weighted_length(attempt1_norm) <= self.max_chars:
                     return attempt1_norm
-            return ""
+            # Fall back to fallback rewrite if all else fails
+            return self._create_fallback_rewrite(
+                cleaned, source_username, source_mention, alert_keyword, source_had_alert
+            )
         
         # Check for non-English text (Chinese, Arabic, etc.)
         if not self._is_english_only(final_text):
             logger.warning("Rewrite contains non-English characters, rejecting")
-            # Fall back to attempt1 if it was valid and English-only, with length enforcement
-            if not name_error and attempt1 and self._is_english_only(attempt1):
-                attempt1_norm = self._normalize_output_format(
-                    self._enforce_length_limit(
-                        attempt1, protected_source, vision_prompt, protected_mapping,
-                        cleaned, vision_context, required_names_str,
-                        source_mention=source_mention, source_username=source_username
-                    ),
-                    source_username,
-                    source_mention
-                )
-                if weighted_length(attempt1_norm) <= self.max_chars:
-                    return attempt1_norm
-            return ""
-        
+            return self._create_fallback_rewrite(
+                cleaned, source_username, source_mention, alert_keyword, source_had_alert
+            )
+
+        # Check for security violations
+        security_error = self._security_check(final_text)
+        if security_error:
+            logger.warning(f"Security violation detected: {security_error}")
+            return self._create_fallback_rewrite(
+                cleaned, source_username, source_mention, alert_keyword, source_had_alert
+            )
+
+        # Final validation before returning
+        final_val_error = self._validate_names(final_text, cleaned, vision_context, source_mention, source_username)
+        if final_val_error:
+            logger.warning(f"Final name validation failed after all retries: {final_val_error}")
+            return self._create_fallback_rewrite(
+                cleaned, source_username, source_mention, alert_keyword, source_had_alert
+            )
+
         return final_text
 
     def _enforce_length_limit(
@@ -835,7 +1048,8 @@ class TweetRewriter:
         required_names_str: str = "", 
         source_mention: Optional[str] = None, 
         source_username: str = "source",
-        required_names: Optional[List[str]] = None
+        required_names: Optional[List[str]] = None,
+        source_had_alert: bool = False
     ) -> str:
         """Garantit le respect des 280 caractères avec préservation de la source exclusive."""
         from .timeutil import weighted_length
@@ -876,7 +1090,7 @@ class TweetRewriter:
         if attempt3:
             attempt3 = self._restore_terms(attempt3, protected_mapping)
             attempt3 = self._apply_post_corrections(attempt3)
-            attempt3_norm = self._normalize_output_format(attempt3, source_username, source_mention)
+            attempt3_norm = self._normalize_output_format(attempt3, source_username, source_mention, source_had_alert)
             if weighted_length(attempt3_norm) <= max_chars:
                 name_err = self._validate_names(attempt3_norm, cleaned, vision_context, source_mention, source_username)
                 if not name_err:
@@ -907,9 +1121,9 @@ class TweetRewriter:
         else:
             body_part = truncated.rsplit(' ', 1)[0].rstrip() + "..."
 
-        return body_part + source_suffix
+        return self._normalize_output_format(body_part, source_username, source_mention, source_had_alert)
 
-    def _normalize_output_format(self, text: str, source_username: str, source_mention: Optional[str] = None) -> str:
+    def _normalize_output_format(self, text: str, source_username: str, source_mention: Optional[str] = None, source_had_alert: bool = False) -> str:
         if not text:
             return text
 
@@ -930,7 +1144,9 @@ class TweetRewriter:
                 kw = "OFFICIAL"
             text_without_kw = text[match.end():].strip()
             text = f"🚨 {kw}: {text_without_kw}"
-        elif not text.startswith('🚨'):
+        elif source_had_alert and not text.startswith('🚨'):
+            # Only add 🚨 if the SOURCE tweet already contained an alert
+            # keyword. Never add it by default.
             text = '🚨 ' + text
 
         # Suppression de toute attribution/suffixe en fin de texte existant
@@ -939,23 +1155,31 @@ class TweetRewriter:
         text = re.sub(r'\s*(\[.*?\]\s*)+$', '', text).rstrip()
 
         # Construction du suffixe pour 1 ou plusieurs sources
-        # ONLY use source_mention (explicit source cited in tweet text)
-        # If NO source_mention, end with just 🔵🔴 (no handle)
+        # Cas A: Use source_mention (explicit citation in tweet text)
+        # Cas B: Use tier-1 journalist if source_username is eligible
+        # Aggregators are never used as attribution sources
         if source_mention:
-            # Nettoyage des mentions dans le corps
-            text = re.sub(rf'\s*\[?@{re.escape(source_mention)}\]?\s*', ' ', text, flags=re.IGNORECASE)
-            text = re.sub(r' +', ' ', text).strip()
-            
-            # Extrait tous les handles (handles séparés par 'via', espace, virgule, etc.)
+            # Cas A: explicit source citation
             handles = [h for h in re.findall(r'@?(\w+)', source_mention) if h.lower() != 'via']
-            
             if handles:
                 sources_str = " ".join([f"[@{h}]" for h in handles])
                 expected_suffix = f"🔵🔴\n{sources_str}"
             else:
                 expected_suffix = "🔵🔴"
+            
+            # Update tier-1 journalists set with recently rated journalists for Cas A
+            username_lower = source_username.lower().lstrip("@")
+            if username_lower in {name.lower() for name in self._TIER1_JOURNALISTS}:
+                self._TWEET_RATED_JOURNALISTS.add(username_lower)
         else:
-            expected_suffix = "🔵🔴"
+            # Cas B: tier-1 journalist attribution
+            username_lower = source_username.lower().lstrip("@")
+            if username_lower in {name.lower() for name in self._TIER1_JOURNALISTS}:
+                expected_suffix = f"🔵🔴\n[@{source_username}]"
+                self._TWEET_RATED_JOURNALISTS.add(username_lower)
+            else:
+                # No attribution if not a tier-1 journalist
+                expected_suffix = "🔵🔴"
 
         text = text.rstrip() + expected_suffix
 

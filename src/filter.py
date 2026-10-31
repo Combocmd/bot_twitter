@@ -82,7 +82,11 @@ class BarcaFilter:
         if not normalized:
             return FilterResult(False, reason="texte vide", language=language or "unknown")
 
-        # Check for explicit Barça signals (fast regex)
+        # Security check: reject internal control words
+        if re.search(r"\b(SKIP|APPROVE)\b", cleaned):
+            return FilterResult(False, reason="mot interdit détecté", language=language or "unknown")
+
+        # Check for explicit Barça signals (fast regex) - REQUIRED for all tweets
         matches = self._find_matches(normalized)
         if matches:
             importance = self._calculate_importance(text, normalized, matches)
@@ -91,20 +95,10 @@ class BarcaFilter:
                 return FilterResult(False, reason=f"signal Barça mais faible importance ({importance:.2f})", language=language or "en", importance_score=importance)
             return FilterResult(True, matched_keywords=matches, reason="signal Barça fort", language=language or "en", importance_score=importance)
 
-        # Check if source is trusted
-        source_is_barca = bool(source_username and source_username.lower().lstrip("@") in self.sources)
-
-        # English content from trusted sources is accepted if it has football context
-        if source_is_barca and self._has_football_context(normalized):
-            # For trusted sources, use LLM to assess importance
-            importance = self._assess_importance_with_llm(text, source_username)
-            # Only accept if importance is above threshold
-            if importance >= 0.4:
-                return FilterResult(True, matched_keywords=["source"], reason="source Barça + contexte football", language=language or "en", importance_score=importance)
-            else:
-                return FilterResult(False, reason=f"source Barça mais faible importance ({importance:.2f})", language=language or "en", importance_score=importance)
-
-        return FilterResult(False, reason="aucun signal Barça suffisant", language=language or "unknown")
+        # NO FALLBACK: even trusted sources must explicitly mention Barça.
+        # This prevents tier-1 journalists (Fabrizio Romano, etc.) tweeting about
+        # Real Madrid/other clubs from being processed.
+        return FilterResult(False, reason="aucun signal Barça explicite (keywords requis)", language=language or "unknown")
 
     def _find_matches(self, text: str) -> List[str]:
         """Find all matching Barça keywords in text."""

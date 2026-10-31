@@ -139,6 +139,8 @@ class PostScheduler:
         has_hearts = "💙" in text or "❤️" in text or "❤" in text
         if has_circles and has_hearts:
             return "familles d'emojis Barça mélangées"
+        if re.search(r"\b(SKIP|APPROVE)\b", text):
+            return "mot interdit détecté"
         return None
 
     @property
