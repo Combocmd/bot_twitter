@@ -141,6 +141,63 @@ class TweetRewriter:
         (re.compile(r"\baccording to information\b", re.IGNORECASE), "reports say"),
         # Remove redundant "official" if already in alert
         (re.compile(r"\bOFFICIAL:\s*official\b", re.IGNORECASE), "OFFICIAL:"),
+        # Fix capitalization after period/newline (sentence start)
+        (re.compile(r'(\.\s+)([a-z])'), lambda m: m.group(1) + m.group(2).upper()),
+        (re.compile(r'(\n\s*)([a-z])'), lambda m: m.group(1) + m.group(2).upper()),
+        # Capitalize common team names (Premier League / Champions League)
+        (re.compile(r"\bmanchester city\b", re.IGNORECASE), "Manchester City"),
+        (re.compile(r"\bmanchester united\b", re.IGNORECASE), "Manchester United"),
+        (re.compile(r"\bnewcastle\b", re.IGNORECASE), "Newcastle"),
+        (re.compile(r"\bnewcastle united\b", re.IGNORECASE), "Newcastle United"),
+        (re.compile(r"\bbournemouth\b", re.IGNORECASE), "Bournemouth"),
+        (re.compile(r"\bfulham\b", re.IGNORECASE), "Fulham"),
+        (re.compile(r"\bliverpool\b", re.IGNORECASE), "Liverpool"),
+        (re.compile(r"\bchelsea\b", re.IGNORECASE), "Chelsea"),
+        (re.compile(r"\barsenal\b", re.IGNORECASE), "Arsenal"),
+        (re.compile(r"\btottenham\b", re.IGNORECASE), "Tottenham"),
+        (re.compile(r"\btottenham hotspur\b", re.IGNORECASE), "Tottenham Hotspur"),
+        (re.compile(r"\bwest ham\b", re.IGNORECASE), "West Ham"),
+        (re.compile(r"\bwest ham united\b", re.IGNORECASE), "West Ham United"),
+        (re.compile(r"\bbrighton\b", re.IGNORECASE), "Brighton"),
+        (re.compile(r"\bbrighton and hove albion\b", re.IGNORECASE), "Brighton & Hove Albion"),
+        (re.compile(r"\baston villa\b", re.IGNORECASE), "Aston Villa"),
+        (re.compile(r"\bwolves\b", re.IGNORECASE), "Wolves"),
+        (re.compile(r"\bwolverhampton\b", re.IGNORECASE), "Wolverhampton"),
+        (re.compile(r"\bcrystal palace\b", re.IGNORECASE), "Crystal Palace"),
+        (re.compile(r"\bbrentford\b", re.IGNORECASE), "Brentford"),
+        (re.compile(r"\bnotottingham forest\b", re.IGNORECASE), "Nottingham Forest"),
+        (re.compile(r"\bnotts forest\b", re.IGNORECASE), "Nottingham Forest"),
+        (re.compile(r"\beverton\b", re.IGNORECASE), "Everton"),
+        (re.compile(r"\bleicester\b", re.IGNORECASE), "Leicester"),
+        (re.compile(r"\bleicester city\b", re.IGNORECASE), "Leicester City"),
+        (re.compile(r"\bsouthampton\b", re.IGNORECASE), "Southampton"),
+        (re.compile(r"\bipswich\b", re.IGNORECASE), "Ipswich"),
+        (re.compile(r"\bipswich town\b", re.IGNORECASE), "Ipswich Town"),
+        # Capitalize competition names
+        (re.compile(r"\bpremier league\b", re.IGNORECASE), "Premier League"),
+        (re.compile(r"\bchampions league\b", re.IGNORECASE), "Champions League"),
+        (re.compile(r"\bcarabao cup\b", re.IGNORECASE), "Carabao Cup"),
+        (re.compile(r"\bfa cup\b", re.IGNORECASE), "FA Cup"),
+        (re.compile(r"\bla liga\b", re.IGNORECASE), "La Liga"),
+        (re.compile(r"\bcopa del rey\b", re.IGNORECASE), "Copa del Rey"),
+        (re.compile(r"\bsupercopa\b", re.IGNORECASE), "Supercopa"),
+        (re.compile(r"\buefa\b", re.IGNORECASE), "UEFA"),
+        (re.compile(r"\bfifa\b", re.IGNORECASE), "FIFA"),
+        # Capitalize stadium names
+        (re.compile(r"\bcamp nou\b", re.IGNORECASE), "Camp Nou"),
+        (re.compile(r"\bspotify camp nou\b", re.IGNORECASE), "Spotify Camp Nou"),
+        (re.compile(r"\bwembley\b", re.IGNORECASE), "Wembley"),
+        (re.compile(r"\bold trafford\b", re.IGNORECASE), "Old Trafford"),
+        (re.compile(r"\bemirates\b", re.IGNORECASE), "Emirates"),
+        (re.compile(r"\banfield\b", re.IGNORECASE), "Anfield"),
+        (re.compile(r"\bstamford bridge\b", re.IGNORECASE), "Stamford Bridge"),
+        # Capitalize Xavi variants (anywhere in text)
+        (re.compile(r"\bxavi\b", re.IGNORECASE), "Xavi"),
+        (re.compile(r"\bxavi hernandez\b", re.IGNORECASE), "Xavi Hernandez"),
+        (re.compile(r"\bxavi hernández\b", re.IGNORECASE), "Xavi Hernández"),
+        (re.compile(r"\bxavi creus\b", re.IGNORECASE), "Xavi Creus"),
+        # Capitalize after comma + space (for cases like "OFFICIAL, xavi departs")
+        (re.compile(r'(,\s+)([a-z])'), lambda m: m.group(1) + m.group(2).upper()),
     ]
 
     # Absolute security guard: internal control words that must NEVER appear
@@ -539,9 +596,10 @@ class TweetRewriter:
         """Extract alert keyword from the beginning of text.
         
         Detects: JUST IN, BREAKING, OFFICIAL, OFFICIEL, URGENT (with or without 🚨 prefix).
+        Also detects standalone 🚨 at start as generic alert.
         Returns: (cleaned_text, alert_keyword) where alert_keyword is empty if none found.
         """
-        # Pattern: optional 🚨 followed by alert keyword at start
+        # Pattern 1: 🚨 followed by recognized keyword
         keywords = ["JUST IN", "BREAKING", "OFFICIAL", "OFFICIEL", "URGENT"]
         pattern = r'^(?:🚨\s*)?(' + '|'.join(keywords) + r')[\s:]+'
         match = re.match(pattern, text, flags=re.IGNORECASE)
@@ -552,6 +610,14 @@ class TweetRewriter:
                 kw = "OFFICIAL"
             cleaned = text[match.end():].strip()
             return cleaned, kw
+        
+        # Pattern 2: Standalone 🚨 at start (no recognized keyword but still an alert)
+        if text.startswith('🚨'):
+            cleaned = text[1:].strip()
+            # Remove leading punctuation/whitespace
+            cleaned = re.sub(r'^[\s:,\-–—]+', '', cleaned)
+            return cleaned, "BREAKING"  # Generic alert keyword
+        
         return text, ""
 
     def _extract_numbers(self, text: str) -> Set[str]:
@@ -1040,21 +1106,29 @@ class TweetRewriter:
         # Protect critical terms before sending to LLM
         protected_source, protected_mapping = self._protect_terms(cleaned)
 
+        # Separate player/staff names from source handles for clearer prompting
+        player_names = [n for n in required_names if not n.startswith('[@')]
+        source_handles = [n for n in required_names if n.startswith('[@')]
+        player_names_str = ", ".join(player_names) if player_names else "none"
+        source_handles_str = ", ".join(source_handles) if source_handles else "none"
+
         prompt = (
             f"Source language: {source_lang}\n"
             f"Original tweet: {protected_source}"
             f"{vision_prompt}\n\n"
-            f"REQUIRED NAMES (must ALL appear naturally in rewrite): {required_names_str}\n\n"
+            f"PLAYER/STAFF NAMES (must ALL appear naturally in sentences): {player_names_str}\n\n"
+            f"SOURCE HANDLES (use EXACTLY ONE for the final 🔵🔴 attribution): {source_handles_str}\n\n"
             f"ALERT KEYWORD (must appear immediately after 🚨 in headline): {alert_keyword if alert_keyword else 'none'}\n\n"
-            f"SOURCE HANDLE: The final 🔵🔴 suffix MUST use the EXACT handle from REQUIRED NAMES. "
-            f"Do NOT invent or substitute any other handle (e.g., @_BarcaInfo, @FabrizioRomano).\n\n"
-            "Rewrite this tweet in natural English, avoiding plagiarism. "
+            "Rewrite this tweet in PROFESSIONAL JOURNALISTIC ENGLISH. "
+            "Style: Concise, newsworthy, neutral tone — like a Reuters/AP sports wire. "
             "Only use vision context for player names or text visible in media. "
             "Do NOT add scene descriptions or inferred details not in the source text. "
-            "CRITICAL: Every name in REQUIRED NAMES must appear in your output. Do not omit any. "
+            "CRITICAL: Every PLAYER/STAFF NAME must appear in your output. Integrate them naturally into sentences. "
+            "CRITICAL: Do NOT use player names as prefixes, headers, or list items. "
             "CRITICAL: Write a COHERENT NEWS SUMMARY — integrate names naturally into sentences. "
             "DO NOT simply list names separated by commas. That is NOT a valid rewrite. "
-            + (f"FORMAT: Start with 🚨 {alert_keyword}: . Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. " if alert_keyword else "FORMAT: Start with the headline directly (NO 🚨). Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. ")
+            + (f"FORMAT: The headline MUST start with 🚨 {alert_keyword}: (with NO text between 🚨 and {alert_keyword}). "
+               f"Then the headline text. Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. " if alert_keyword else "FORMAT: Start with the headline directly (NO 🚨). Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. ")
             + "State each fact exactly once — no redundant repetition of names or information. "
             "IMPORTANT: The ALERT KEYWORD (if provided) must ONLY appear immediately after 🚨 in the headline. "
             "NEVER use alert keywords (JUST IN, BREAKING, OFFICIAL, URGENT) anywhere else in the tweet body. "
@@ -1105,18 +1179,20 @@ class TweetRewriter:
             strict_prompt = (
                 f"Source: {protected_source}"
                 f"{vision_prompt}\n\n"
-                f"REQUIRED NAMES (must ALL appear in rewrite): {required_names_str}\n\n"
-                f"SOURCE HANDLE: The final 🔵🔴 suffix MUST use the EXACT handle from REQUIRED NAMES. "
-                f"Do NOT invent or substitute any other handle (e.g., @_BarcaInfo, @FabrizioRomano).\n\n"
-                "REWRITE THIS TWEET IN NATURAL ENGLISH WITHOUT COPYING ANY WORDS. "
+                f"PLAYER/STAFF NAMES (must ALL appear naturally in sentences): {player_names_str}\n\n"
+                f"SOURCE HANDLES (use EXACTLY ONE for the final 🔵🔴 attribution): {source_handles_str}\n\n"
+                "REWRITE THIS TWEET IN PROFESSIONAL JOURNALISTIC ENGLISH WITHOUT COPYING ANY WORDS. "
+                "Style: Concise, newsworthy, neutral tone — like a Reuters/AP sports wire. "
                 "Change sentence structure, word order, and phrasing completely. "
-                "CRITICAL: Every name in REQUIRED NAMES must appear in your output. Do not omit any. "
+                "CRITICAL: Every PLAYER/STAFF NAME must appear in your output. Integrate them naturally into sentences. "
+                "CRITICAL: Do NOT use player names as prefixes, headers, or list items. "
                 "Do NOT add any player or staff names that are not in the source text or vision context. "
                 "Only use vision context for player names or text visible in media. "
                 "Do NOT add scene descriptions or inferred details not in the source text. "
                 "CRITICAL: Write a COHERENT NEWS SUMMARY — integrate names naturally into sentences. "
                 "DO NOT simply list names separated by commas. That is NOT a valid rewrite. "
-                + (f"FORMAT: Start with 🚨 {alert_keyword}: . Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. " if alert_keyword else "FORMAT: Start with the headline directly (NO 🚨). Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. ")
+                + (f"FORMAT: The headline MUST start with 🚨 {alert_keyword}: (with NO text between 🚨 and {alert_keyword}). "
+                   f"Then the headline text. Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. " if alert_keyword else "FORMAT: Start with the headline directly (NO 🚨). Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. ")
                 + "State each fact exactly once — no redundant repetition of names or information. "
                 "Respond ONLY with the rewritten tweet."
             )
