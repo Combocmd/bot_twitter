@@ -283,6 +283,11 @@ class BotOrchestrator:
                     logger.info("Arrêt demandé: cycle interrompu avant le traitement suivant")
                     break
                 try:
+                    # Filter by language: only French and English
+                    if tweet.language and tweet.language not in ("fr", "en"):
+                        logger.debug("Skipping tweet in unsupported language: {} (@{})", tweet.language, tweet.source_username)
+                        stats["barca_filtered"] += 1
+                        continue
                     created_at = tweet.created_at_dt
                     if created_at is None:
                         logger.warning("Tweet source sans date valide, ignoré: {}", tweet.tweet_id)

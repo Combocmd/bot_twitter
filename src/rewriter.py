@@ -169,7 +169,7 @@ class TweetRewriter:
 
     # All known Barça players + staff for validation (must match _PROTECTED_TERMS)
     _VALID_NAMES = {
-        # Players
+        # Current Players
         "Yamal", "Lamine Yamal", "Pedri", "Gavi", "De Jong", "Frenkie de Jong",
         "Lewandowski", "Robert Lewandowski", "Raphinha", "Kounde", "Jules Kounde",
         "Araujo", "Ronald Araujo", "Balde", "Alejandro Balde", "Ter Stegen",
@@ -179,8 +179,135 @@ class TweetRewriter:
         "Pena", "Inaki Pena", "Iñaki Peña", "Szczesny", "Wojciech Szczesny", "Fort", "Hector Fort", "Héctor Fort",
         "Casado", "Marc Casado", "Bernal", "Marc Bernal", "Torre", "Pablo Torre",
         "Cubarsi", "Pau Cubarsi", "Pau Cubarsí",
-        # Staff
-        "Flick", "Hansi Flick", "Deco", "Laporta", "Joan Laporta",
+        # Former Players - Legends
+        "Xavi", "Xavi Hernandez", "Xavi Hernández", "Xavi Creus",
+        "Iniesta", "Andres Iniesta", "Andrés Iniesta",
+        "Messi", "Lionel Messi", "Leo Messi",
+        "Ronaldinho", "Ronaldinho Gaucho", "Ronaldinho Gaúcho",
+        "Puyol", "Carles Puyol",
+        "Pique", "Gerard Pique", "Gerard Piqué",
+        "Alves", "Dani Alves", "Daniel Alves",
+        "Busquets", "Sergio Busquets",
+        "Alba", "Jordi Alba",
+        "Suarez", "Luis Suarez", "Luis Suárez",
+        "Neymar", "Neymar Jr",
+        "Henry", "Thierry Henry",
+        "Eto'o", "Samuel Eto'o", "Samuel Eto'o",
+        "Ronald Koeman", "Koeman",
+        "Guardiola", "Pep Guardiola",
+        "Rivaldo", "Ronaldo", "Ronaldo Nazario", "Ronaldo Nazário",
+        "Maradona", "Diego Maradona",
+        "Stoichkov", "Hristo Stoichkov",
+        "Laudrup", "Michael Laudrup",
+        "Bakero", "Jose Mari Bakero", "José Mari Bakero",
+        "Amor", "Miguel Angel Amor", "Miguel Ángel Amor",
+        "Begiristain", "Txiki Begiristain",
+        "Zubizarreta", "Andoni Zubizarreta",
+        "Stoichkov", "Hristo Stoichkov",
+        "Figo", "Luis Figo",
+        "Kluivert", "Patrick Kluivert",
+        "Overmars", "Marc Overmars",
+        "Cocu", "Phillip Cocu",
+        "Reiziger", "Michael Reiziger",
+        "De Boer", "Frank de Boer", "Ronald de Boer",
+        "Kluivert", "Patrick Kluivert",
+        "Saviola", "Javier Saviola",
+        "Riquelme", "Juan Roman Riquelme", "Juan Román Riquelme",
+        "Marquez", "Rafael Marquez", "Rafael Márquez",
+        "Edmilson", "Giovanni", "Giovanni Silva",
+        "Ronaldinho", "Ronaldinho",
+        "Deco", "Anderson Deco", "Anderson Luís de Souza",
+        "Eto'o", "Samuel Eto'o",
+        "Henry", "Thierry Henry",
+        "Touré", "Yaya Touré", "Yaya Toure",
+        "Keita", "Seydou Keita",
+        "Abidal", "Eric Abidal",
+        "Milito", "Gabriel Milito",
+        "Caceres", "Martin Caceres", "Martín Cáceres",
+        "Maxwell", "Maxwell Scherrer",
+        "Puyol", "Carles Puyol",
+        "Valdes", "Victor Valdes", "Víctor Valdés",
+        "Pinto", "Jose Pinto", "José Pinto",
+        "Fontas", "Andre Fontas", "André Fontàs",
+        "Muniesa", "Marc Muniesa",
+        "Bartra", "Marc Bartra",
+        "Montoya", "Martin Montoya", "Martín Montoya",
+        "Tello", "Cristian Tello",
+        "Dos Santos", "Jonathan Dos Santos",
+        "Rafinha", "Rafinha Alcantara", "Rafinha Alcântara",
+        "Alcacer", "Paco Alcacer", "Paco Alcácer",
+        "Sandru", "Adrian Sandru", "Adrián Sandru",
+        "Samper", "Sergi Samper",
+        "Gumbau", "Alfredo Gumbau",
+        "Halet", "Jean Marie Halet", "Jean-Marie Halet",
+        "Vermaelen", "Thomas Vermaelen",
+        "Mathieu", "Jeremy Mathieu", "Jérémy Mathieu",
+        "Douglas", "Douglas Pereira",
+        "Adriano", "Adriano Correia",
+        "Alves", "Dani Alves",
+        "Mascherano", "Javier Mascherano",
+        "Rakitic", "Ivan Rakitic", "Ivan Rakitić",
+        "Suarez", "Luis Suarez", "Luis Suárez",
+        "Neymar", "Neymar Jr", "Neymar Junior",
+        "Turan", "Arda Turan",
+        "Vidal", "Aleix Vidal",
+        "Gomes", "Andre Gomes", "André Gomes",
+        "Digne", "Lucas Digne",
+        "Umtiti", "Samuel Umtiti",
+        "Dembele", "Ousmane Dembele", "Ousmane Dembélé",
+        "Paulino", "Paulinho",
+        "Semedo", "Nelson Semedo",
+        "Arthur", "Arthur Melo",
+        "Malcom", "Malcom Filipe",
+        "Murillo", "Jeison Murillo",
+        "Boateng", "Kevin Prince Boateng", "Kevin-Prince Boateng",
+        "Coutinho", "Philippe Coutinho",
+        "Mina", "Yerry Mina",
+        "Lenglet", "Clement Lenglet", "Clément Lenglet",
+        "De Jong", "Frenkie de Jong",
+        "Griezmann", "Antoine Griezmann",
+        "Braithwaite", "Martin Braithwaite",
+        "Pjanic", "Miralem Pjanic", "Miralem Pjanić",
+        "Pedri", "Pedri Gonzalez", "Pedri González",
+        "Mingueza", "Oscar Mingueza", "Óscar Mingueza",
+        "Dest", "Sergino Dest", "Sergiño Dest",
+        "Garcia", "Eric Garcia", "Eric García",
+        "Depay", "Memphis Depay",
+        "Torres", "Ferran Torres",
+        "Aubameyang", "Pierre-Emerick Aubameyang", "Pierre Emerick Aubameyang",
+        "Alves", "Dani Alves",
+        "Christensen", "Andreas Christensen",
+        "Kessie", "Franck Kessie", "Franck Kessié",
+        "Kounde", "Jules Kounde", "Jules Koundé",
+        "Raphinha", "Raphinha",
+        "Lewandowski", "Robert Lewandowski",
+        "Gavi", "Pablo Gavi", "Pablo Páez Gavira",
+        "Balde", "Alejandro Balde",
+        "Fati", "Ansu Fati",
+        "Yamal", "Lamine Yamal",
+        "Olmo", "Dani Olmo",
+        "Pau Victor", "Pau Víctor",
+        "Casado", "Marc Casado",
+        "Bernal", "Marc Bernal",
+        "Torre", "Pablo Torre",
+        "Fort", "Hector Fort", "Héctor Fort",
+        "Cubarsi", "Pau Cubarsi", "Pau Cubarsí",
+        "Dominguez", "Alex Dominguez", "Álex Domínguez",
+        "Astrid", "Astrid Gil", "Astrid Gil-Cagné",
+        # Staff - Current and Former
+        "Flick", "Hansi Flick",
+        "Deco", "Anderson Deco",
+        "Laporta", "Joan Laporta",
+        "Xavi", "Xavi Hernandez", "Xavi Hernández", "Xavi Creus",
+        "Koeman", "Ronald Koeman",
+        "Setien", "Quique Setien", "Quique Setién",
+        "Valverde", "Ernesto Valverde",
+        "Luis Enrique", "Luis Enrique Martinez", "Luis Enrique Martínez",
+        "Tata Martino", "Gerardo Martino",
+        "Vilanova", "Tito Vilanova",
+        "Rijkaard", "Frank Rijkaard",
+        "Guardiola", "Pep Guardiola",
+        "Cruyff", "Johan Cruyff",
     }
 
     def __init__(self, config=None):
@@ -480,8 +607,56 @@ class TweetRewriter:
                 found.add(name)
         return found
 
+    def _check_fake_barca_claims(self, text: str) -> Optional[str]:
+        """Detect fake claims that a non-Barça player is a Barça player.
+        
+        Looks for patterns like 'ancien footballeur du FC Barcelone : [Name]' 
+        or 'ancien joueur du Barça : [Name]' where Name is NOT in Barça knowledge base.
+        """
+        # Patterns that claim someone is a Barça player
+        barca_claim_patterns = [
+            r'ancien\s+footballeur\s+(?:du|de)\s+FC\s+Barcelone\s*[:\-]\s*([A-Z][a-zA-Z\-\']+(?:\s+[A-Z][a-zA-Z\-\']+)?)',
+            r'ancien\s+joueur\s+(?:du|de)\s+(?:FC\s+)?Barcelone\s*[:\-]\s*([A-Z][a-zA-Z\-\']+(?:\s+[A-Z][a-zA-Z\-\']+)?)',
+            r'ancien\s+joueur\s+(?:du|de)\s+Barça\s*[:\-]\s*([A-Z][a-zA-Z\-\']+(?:\s+[A-Z][a-zA-Z\-\']+)?)',
+            r'ancien\s+du\s+FC\s+Barcelone\s*[:\-]\s*([A-Z][a-zA-Z\-\']+(?:\s+[A-Z][a-zA-Z\-\']+)?)',
+            r'ancien\s+du\s+Barça\s*[:\-]\s*([A-Z][a-zA-Z\-\']+(?:\s+[A-Z][a-zA-Z\-\']+)?)',
+            r'ex\s*[-]?\s*joueur\s+(?:du|de)\s+(?:FC\s+)?Barcelone\s*[:\-]\s*([A-Z][a-zA-Z\-\']+(?:\s+[A-Z][a-zA-Z\-\']+)?)',
+            r'ex\s*[-]?\s*du\s+(?:FC\s+)?Barcelone\s*[:\-]\s*([A-Z][a-zA-Z\-\']+(?:\s+[A-Z][a-zA-Z\-\']+)?)',
+            r'legend(?:e)?\s+(?:du|de)\s+(?:FC\s+)?Barcelone\s*[:\-]\s*([A-Z][a-zA-Z\-\']+(?:\s+[A-Z][a-zA-Z\-\']+)?)',
+        ]
+        
+        import unicodedata
+        def normalize_name(name: str) -> str:
+            # Remove accents, lowercase
+            name = unicodedata.normalize('NFD', name)
+            name = ''.join(c for c in name if unicodedata.category(c) != 'Mn')
+            return name.lower().strip()
+        
+        # Normalize valid names for comparison
+        valid_names_norm = {normalize_name(n) for n in self._VALID_NAMES}
+        
+        for pattern in barca_claim_patterns:
+            matches = re.finditer(pattern, text, re.IGNORECASE)
+            for match in matches:
+                claimed_name = match.group(1).strip()
+                claimed_norm = normalize_name(claimed_name)
+                
+                # Check if this claimed name is in our Barça knowledge base
+                if claimed_norm not in valid_names_norm:
+                    # Also check partial matches (e.g., "Rashford" for "Marcus Rashford")
+                    is_partial = any(claimed_norm in v or v in claimed_norm for v in valid_names_norm)
+                    if not is_partial:
+                        return f"fake Barça claim detected: '{claimed_name}' presented as Barça player but not in knowledge base"
+        
+        return None
+
     def _validate_names(self, rewritten: str, source: str, vision_context: Optional[Dict] = None, source_mention: Optional[str] = None, source_username: str = "source") -> Optional[str]:
         """Reject if any player/staff name from source is missing in rewritten, or if rewritten has names not in source/vision."""
+        # First: check for fake Barça player claims in source (misinformation detection)
+        fake_claim_error = self._check_fake_barca_claims(source)
+        if fake_claim_error:
+            return fake_claim_error
+
         source_names = self._extract_names(source)
         
         # Add vision-detected names to allowed list
@@ -879,8 +1054,8 @@ class TweetRewriter:
             "CRITICAL: Every name in REQUIRED NAMES must appear in your output. Do not omit any. "
             "CRITICAL: Write a COHERENT NEWS SUMMARY — integrate names naturally into sentences. "
             "DO NOT simply list names separated by commas. That is NOT a valid rewrite. "
-            "FORMAT: Start with 🚨. Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. "
-            "State each fact exactly once — no redundant repetition of names or information. "
+            + (f"FORMAT: Start with 🚨 {alert_keyword}: . Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. " if alert_keyword else "FORMAT: Start with the headline directly (NO 🚨). Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. ")
+            + "State each fact exactly once — no redundant repetition of names or information. "
             "IMPORTANT: The ALERT KEYWORD (if provided) must ONLY appear immediately after 🚨 in the headline. "
             "NEVER use alert keywords (JUST IN, BREAKING, OFFICIAL, URGENT) anywhere else in the tweet body. "
             "Follow the rules above. Respond ONLY with the rewritten tweet."
@@ -914,6 +1089,10 @@ class TweetRewriter:
         name_error = self._validate_names(attempt1, cleaned, vision_context, source_mention, source_username)
         if name_error:
             logger.warning(f"Name validation failed: {name_error}")
+            # HARD REJECTION for fake Barça claims - never publish misinformation
+            if "fake Barça claim" in name_error:
+                logger.error(f"HARD REJECTION: fake Barça claim detected, tweet discarded")
+                return ""
 
         # Check for name list (comma-separated names without sentence structure)
         name_list_error = None
@@ -937,8 +1116,8 @@ class TweetRewriter:
                 "Do NOT add scene descriptions or inferred details not in the source text. "
                 "CRITICAL: Write a COHERENT NEWS SUMMARY — integrate names naturally into sentences. "
                 "DO NOT simply list names separated by commas. That is NOT a valid rewrite. "
-                "FORMAT: Start with 🚨. Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. "
-                "State each fact exactly once — no redundant repetition of names or information. "
+                + (f"FORMAT: Start with 🚨 {alert_keyword}: . Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. " if alert_keyword else "FORMAT: Start with the headline directly (NO 🚨). Use \\n\\n between headline and body, and before the final 🔵🔴 [@source] attribution. ")
+                + "State each fact exactly once — no redundant repetition of names or information. "
                 "Respond ONLY with the rewritten tweet."
             )
             attempt2 = self._llm_generate(self.ENGLISH_REWRITE_SYSTEM, strict_prompt, "strict retry")
@@ -994,6 +1173,10 @@ class TweetRewriter:
         final_name_error = self._validate_names(final_text, cleaned, vision_context, source_mention, source_username)
         if final_name_error:
             logger.warning(f"Final name validation failed: {final_name_error}")
+            # HARD REJECTION for fake Barça claims - never publish misinformation
+            if "fake Barça claim" in final_name_error:
+                logger.error(f"HARD REJECTION: fake Barça claim detected, tweet discarded")
+                return ""
             # Try to fix by adding missing names
             fixed_text = self._fix_missing_names(final_text, cleaned, vision_context)
             if fixed_text and fixed_text != final_text:
@@ -1148,6 +1331,9 @@ class TweetRewriter:
             # Only add 🚨 if the SOURCE tweet already contained an alert
             # keyword. Never add it by default.
             text = '🚨 ' + text
+        elif not source_had_alert and text.startswith('🚨'):
+            # Source had no alert, but LLM added 🚨 anyway - strip it
+            text = re.sub(r'^🚨\s*', '', text)
 
         # Suppression de toute attribution/suffixe en fin de texte existant
         # Match 🔵🔴 followed by any bracketed content, or just bracketed content at end
