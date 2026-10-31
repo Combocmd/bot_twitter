@@ -913,6 +913,9 @@ class TweetRewriter:
         if not text:
             return text
 
+        # Fix: replace escaped newlines (\n as literal backslash-n) with actual newlines
+        text = text.replace('\\n', '\n')
+
         # Normalisation des sauts de ligne
         text = re.sub(r'\r\n', '\n', text)
         text = re.sub(r'\n{3,}', '\n\n', text).strip()
